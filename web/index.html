@@ -169,6 +169,9 @@
         <button class="theme-btn" id="checkUpdateBtn" type="button" data-i18n="checkUpdate"></button>
         <span class="small" id="updateCheckMsg"></span>
       </div>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <label class="small muted" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="notifyOfflineChk"/> <span data-i18n="notifyOffline"></span></label>
+      </div>
       <p class="small muted" style="margin:10px 0 0" data-i18n="settingsHint"></p>
     </div>
   </div>
@@ -242,38 +245,6 @@
     </section>
   </div>
 
-  <!-- 历史曲线：后端落盘，刷新页面不丢失 -->
-  <section class="st-card" data-i18n-aria="history">
-    <div class="hist-head">
-      <h2 data-i18n="history"></h2>
-      <div class="hist-legend" id="histLegend">
-        <button type="button" class="dim-btn" data-dim="decode" data-active="true"><i style="background:#10b981"></i><span data-i18n="legendDecode"></span></button>
-        <button type="button" class="dim-btn" data-dim="prefill" data-active="true"><i style="background:#38bdf8"></i><span data-i18n="legendPrefill"></span></button>
-        <button type="button" class="dim-btn" data-dim="kv" data-active="false"><i style="background:#f59e0b"></i><span data-i18n="legendKv"></span></button>
-        <button type="button" class="dim-btn" data-dim="gpu" data-active="false"><i style="background:#a78bfa"></i><span data-i18n="legendGpu"></span></button>
-      </div>
-      <div class="range" id="histRange">
-        <button type="button" data-minutes="15" data-i18n="range15"></button>
-        <button type="button" data-minutes="60" data-active="true" data-i18n="range60"></button>
-        <button type="button" data-minutes="1440" data-i18n="range1440"></button>
-      </div>
-      <button type="button" class="theme-btn" id="exportHistBtn" data-i18n="exportCsv"></button>
-    </div>
-    <div class="hist-wrap">
-      <canvas id="histCanvas"></canvas>
-      <div class="hist-tip" id="histTip"></div>
-    </div>
-    <div class="small" id="histStats" style="margin-top:8px"></div>
-    <p class="small muted" style="margin:10px 0 0" data-i18n="histNote"></p>
-  </section>
-
-  <!-- 状态事件：只记轮询到的状态变化，不新增 NInfer 调用 -->
-  <section class="st-card" data-i18n-aria="events">
-    <h2 data-i18n="events"></h2>
-    <ul id="eventList" style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8"></ul>
-    <p class="small muted" id="eventsEmpty" style="display:none" data-i18n="eventsEmpty"></p>
-  </section>
-
   <!-- 上下文占用 + 当前请求 -->
   <div class="monitor-context-requests">
     <section class="st-card monitor-context">
@@ -315,6 +286,39 @@
       <div><dt data-i18n="reusedSince"></dt><dd id="reusedTotalText">—</dd></div>
     </dl>
     <p class="small muted" data-i18n="cacheNote"></p>
+  </section>
+
+  <!-- 历史曲线：后端落盘，刷新页面不丢失 -->
+  <section class="st-card" data-i18n-aria="history">
+    <div class="hist-head">
+      <h2 data-i18n="history"></h2>
+      <div class="hist-legend" id="histLegend">
+        <button type="button" class="dim-btn" data-dim="decode" data-active="true"><i style="background:#10b981"></i><span data-i18n="legendDecode"></span></button>
+        <button type="button" class="dim-btn" data-dim="prefill" data-active="true"><i style="background:#38bdf8"></i><span data-i18n="legendPrefill"></span></button>
+        <button type="button" class="dim-btn" data-dim="kv" data-active="false"><i style="background:#f59e0b"></i><span data-i18n="legendKv"></span></button>
+        <button type="button" class="dim-btn" data-dim="gpu" data-active="false"><i style="background:#a78bfa"></i><span data-i18n="legendGpu"></span></button>
+      </div>
+      <div class="range" id="histRange">
+        <button type="button" data-minutes="15" data-i18n="range15"></button>
+        <button type="button" data-minutes="60" data-active="true" data-i18n="range60"></button>
+        <button type="button" data-minutes="1440" data-i18n="range1440"></button>
+        <button type="button" id="range10080Btn" data-minutes="10080" data-i18n="range10080"></button>
+      </div>
+      <button type="button" class="theme-btn" id="exportHistBtn" data-i18n="exportCsv"></button>
+    </div>
+    <div class="hist-wrap">
+      <canvas id="histCanvas"></canvas>
+      <div class="hist-tip" id="histTip"></div>
+    </div>
+    <div class="small" id="histStats" style="margin-top:8px"></div>
+    <p class="small muted" style="margin:10px 0 0" data-i18n="histNote"></p>
+  </section>
+
+  <!-- 状态事件：只记轮询到的状态变化，不新增 NInfer 调用 -->
+  <section class="st-card" data-i18n-aria="events">
+    <h2 data-i18n="events"></h2>
+    <ul id="eventList" style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8"></ul>
+    <p class="small muted" id="eventsEmpty" style="display:none" data-i18n="eventsEmpty"></p>
   </section>
 
   <p class="small muted" data-i18n="footerNote"></p>
@@ -371,6 +375,7 @@ langSel.addEventListener('change', () => {
 applyI18n();
 // 历史曲线：数据来自后端 /api/history（落盘），刷新不丢。
 let histMinutes = 60, histSamples = [];
+let _histMarkers = []; // {x, text} for events inside the drawn window
 // Dimension selection, persisted in localStorage (default: decode + prefill,
 // the previous view). Toggling only redraws — samples already carry all dims.
 let histDims = (() => {
@@ -405,6 +410,10 @@ async function fetchHistory(){
   try{
     const j = await (await fetch('/api/history?minutes=' + histMinutes)).json();
     histSamples = j.samples || [];
+    // The 7-day range is only real when the backend keeps that long;
+    // otherwise the button would promise a window the API clamps away.
+    const b7 = $('range10080Btn');
+    if(b7) b7.style.display = (j.retention_seconds && j.retention_seconds >= 604800) ? '' : 'none';
   }catch(e){ /* 曲线缺失不影响主面板 */ }
 }
 function drawHistory(){
@@ -487,9 +496,29 @@ function drawHistory(){
   if(pctDims.includes('kv')){ const a = _avg('kv'); if(a !== null) statParts.push(T().histTipKv + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
   if(pctDims.includes('gpu')){ const a = _avg('gpu'); if(a !== null) statParts.push(T().histTipGpu + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
   $('histStats').textContent = statParts.join(' · ');
+  // State-change markers on the curve: offline red, recovery green,
+  // other transitions grey. Events come from /api/events, already fetched.
+  _histMarkers = [];
+  _eventsCache.forEach(e => {
+    if(e.t < t0 || e.t > t1) return;
+    const mx = padL + (t1 > t0 ? (e.t - t0) / (t1 - t0) : 0) * iw;
+    const color = e.to === 'offline' ? '#f87171' : (e.from === 'offline' ? '#10b981' : '#9ca3af');
+    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+    ctx.moveTo(mx, padT); ctx.lineTo(mx, h - padB); ctx.stroke();
+    _histMarkers.push({x: mx, text: new Date(e.t * 1000).toLocaleTimeString() + ' ' +
+      stateLabel(e.from) + ' → ' + stateLabel(e.to) + (e.error ? ' · ' + e.error.slice(0, 100) : '')});
+  });
   cv.onmousemove = (ev) => {
     const rect = cv.getBoundingClientRect();
     const x = ev.clientX - rect.left;
+    const marker = _histMarkers.find(m => Math.abs(m.x - x) <= 6);
+    if(marker){
+      tip.style.display = 'block';
+      tip.style.left = Math.min(w - 190, x + 12) + 'px';
+      tip.style.top = '8px';
+      tip.textContent = marker.text;
+      return;
+    }
     let best = null, bestD = 1e9;
     pts.forEach(p => {
       const px = padL + (t1 > t0 ? (p.t - t0) / (t1 - t0) : 0) * iw;
@@ -581,6 +610,7 @@ function ninferToStrata(s){
   if(s.state==='queued') return 'queued';
   return 'idle';
 }
+let _prevOnline = null;
 async function tick(){
   let s;
   try{ s=await (await fetch('/api/snapshot')).json(); }catch(e){ s={ninfer_ok:false,state:'offline',error:String(e)}; }
@@ -595,7 +625,9 @@ async function tick(){
   $('uptimeText').textContent = has(s.uptime_seconds) ? (T().uptimeLabel + ' ' + fmtDuration(s.uptime_seconds)) : '';
   $('currentBase').textContent = s.ninfer_base_url || '—';
   const err=$('err');
-  if(!s.ninfer_ok){ err.style.display='block'; err.textContent=T().errPrefix+(s.error||T().unknown)+T().errSuffix; }
+  if(!s.ninfer_ok){ err.style.display='block'; err.textContent=T().errPrefix+(s.error||T().unknown)+T().errSuffix +
+    (s.last_ok ? ' · ' + T().lastOnline.replace('{t}', new Date(s.last_ok * 1000).toLocaleTimeString()) +
+    ' · ' + T().offlineFor.replace('{d}', fmtDuration(Math.max(0, Date.now() / 1000 - s.last_ok))) : ''); }
   else err.style.display='none';
   const r=s.requests||{}, inst=s.instant||{}, m=s.metrics||{}, ctx=s.context||{};
   let phaseText, detail='';
@@ -701,6 +733,13 @@ async function tick(){
     $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateNum(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0));
   }
   fetchHistory().then(drawHistory);
+  if(_prevOnline === true && !s.ninfer_ok){
+    const chk = $('notifyOfflineChk');
+    if(chk && chk.checked && 'Notification' in window && Notification.permission === 'granted'){
+      try{ new Notification(T().notifyOfflineTitle, {body: T().notifyOfflineBody}); }catch(e){}
+    }
+  }
+  _prevOnline = !!s.ninfer_ok;
 }
 let _updateData = null;
 function renderUpdateBanner(){
@@ -782,6 +821,17 @@ $('checkUpdateBtn').addEventListener('click', async () => {
     msg.textContent = T().updateCheckFailed;
   }
 });
+// Offline notification: opt-in, stored locally. Permission is only
+// requested on this toggle (a user gesture); a denial unchecks it.
+const notifyChk = $('notifyOfflineChk');
+try{ notifyChk.checked = localStorage.getItem('ninfer-panel-notify-offline') === '1'; }catch(e){}
+notifyChk.addEventListener('change', async () => {
+  if(notifyChk.checked && 'Notification' in window && Notification.permission === 'default'){
+    const perm = await Notification.requestPermission();
+    if(perm !== 'granted') notifyChk.checked = false;
+  }
+  try{ localStorage.setItem('ninfer-panel-notify-offline', notifyChk.checked ? '1' : '0'); }catch(e){}
+});
 // Display refresh interval only (backend sampling stays at its own POLL).
 // Stored in localStorage; the backend history point density is unaffected.
 let pollMs = (() => {
@@ -853,7 +903,24 @@ async function fetchEvents(){
     renderEvents();
   }catch(e){ /* events missing never breaks the main panel */ }
 }
-tick(); fetchEvents(); restartPoll();
+// Spark seeding: on load, seed the page-local spark buffers from the
+// persisted backend history (last 30 points of a 5-minute window), then
+// live ticks keep appending. A refresh therefore no longer wipes the
+// decode / prefill / GPU-load sparklines. The other five cards have no
+// backend series (history stores decode, prefill, KV and GPU only), so
+// their sparklines stay page-local.
+async function seedSparks(){
+  try{
+    const j = await (await fetch('/api/history?minutes=5')).json();
+    const s = (j.samples || []).slice(-30);
+    if(s.length){
+      H.decode = s.map(p => p.decode);
+      H.prefill = s.map(p => p.prefill);
+      H.gpu = s.map(p => p.gpu);
+    }
+  }catch(e){ /* seeding is best-effort; live ticks fill the sparklines anyway */ }
+}
+seedSparks().finally(() => { tick(); fetchEvents(); restartPoll(); });
 </script>
 </body>
 </html>
