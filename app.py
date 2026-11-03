@@ -95,7 +95,8 @@ def _history_load():
                 t = float(p["t"])
                 if t >= cutoff:
                     _series.append((t, p.get("d"), p.get("p"), p.get("k"), p.get("g"),
-                                    p.get("v"), p.get("e"), p.get("w"), p.get("c"), p.get("s")))
+                                    p.get("v"), p.get("e"), p.get("w"), p.get("c"), p.get("s"),
+                                    p.get("o")))
             except (ValueError, KeyError, TypeError):
                 continue
     except Exception:
@@ -103,11 +104,16 @@ def _history_load():
 
 
 def _history_append(now, decode, prefill, kv_pct, gpu_pct,
-                    vram_gb=None, temp_c=None, power_w=None, cpu_pct=None, disk_read_mbs=None):
-    """Append one point to memory and to the file; prune stale data."""
+                    vram_gb=None, temp_c=None, power_w=None, cpu_pct=None, disk_read_mbs=None,
+                    cum_decode=None):
+    """Append one point to memory and to the file; prune stale data.
+
+    cum_decode is the committed_decode_tokens counter at poll time: a level,
+    not a rate, so the cumulative-output curve reads it directly and the
+    downsampler keeps the bucket-end value instead of averaging it."""
     global _last_file_prune
     _series.append((now, decode, prefill, kv_pct, gpu_pct,
-                    vram_gb, temp_c, power_w, cpu_pct, disk_read_mbs))
+                    vram_gb, temp_c, power_w, cpu_pct, disk_read_mbs, cum_decode))
     cutoff = now - HISTORY_RETENTION
     while _series and _series[0][0] < cutoff:
         _series.popleft()
@@ -117,13 +123,15 @@ def _history_append(now, decode, prefill, kv_pct, gpu_pct,
         with path.open("a") as fh:
             fh.write(json.dumps(
                 {"t": now, "d": decode, "p": prefill, "k": kv_pct, "g": gpu_pct,
-                 "v": vram_gb, "e": temp_c, "w": power_w, "c": cpu_pct, "s": disk_read_mbs}) + "\n")
+                 "v": vram_gb, "e": temp_c, "w": power_w, "c": cpu_pct, "s": disk_read_mbs,
+                 "o": cum_decode}) + "\n")
         if now - _last_file_prune > 3600:
             _last_file_prune = now
             with path.open("w") as fh:
-                for t, d, p, k, g, v, e, w, c, s in _series:
+                for t, d, p, k, g, v, e, w, c, s, o in _series:
                     fh.write(json.dumps({"t": t, "d": d, "p": p, "k": k, "g": g,
-                                         "v": v, "e": e, "w": w, "c": c, "s": s}) + "\n")
+                                         "v": v, "e": e, "w": w, "c": c, "s": s,
+                                         "o": o}) + "\n")
     except Exception:
         pass  # history falls back to memory-only; never break polling
 
@@ -794,9 +802,13 @@ def _poll_once():
         power_w = card0.get("power_w")
     cpu_pct = snap["host_cpu"].get("util_percent") if snap["host_cpu"].get("available") else None
     disk_read = snap["host_disk"].get("read_mbs") if snap["host_disk"].get("available") else None
+    # Cumulative counter only when NInfer actually reported it; a missing
+    # counter stays None (no invented zero) so the cumulative curve gaps.
+    _cum = ctr.get("committed_decode_tokens")
+    _cum = int(_cum) if _cum is not None else None
     _history_append(now, decode_rate, prefill_rate,
                     (kv_tokens / kv_cap * 100.0) if kv_cap else None, gpu_util,
-                    vram_gb, temp_c, power_w, cpu_pct, disk_read)
+                    vram_gb, temp_c, power_w, cpu_pct, disk_read, _cum)
     return snap
 
 
@@ -879,15 +891,20 @@ class Handler(BaseHTTPRequestHandler):
                     def avg(idx):
                         vs = [v[idx] for v in vals if v[idx] is not None]
                         return sum(vs) / len(vs) if vs else None
+                    def last(idx):
+                        for v in reversed(vals):
+                            if v[idx] is not None:
+                                return v[idx]
+                        return None
                     out.append({"t": vals[len(vals) // 2][0], "decode": avg(1),
                                 "prefill": avg(2), "kv": avg(3), "gpu": avg(4),
                                 "vram": avg(5), "temp": avg(6), "power": avg(7),
-                                "cpu": avg(8), "disk": avg(9)})
+                                "cpu": avg(8), "disk": avg(9), "out": last(10)})
                 pts = out
             else:
                 pts = [{"t": t, "decode": d, "prefill": p, "kv": k, "gpu": g,
-                        "vram": v, "temp": e, "power": w, "cpu": c, "disk": s}
-                       for t, d, p, k, g, v, e, w, c, s in pts]
+                        "vram": v, "temp": e, "power": w, "cpu": c, "disk": s, "out": o}
+                       for t, d, p, k, g, v, e, w, c, s, o in pts]
             self._send(200, json.dumps({"samples": pts, "minutes": minutes,
                                         "retention_seconds": HISTORY_RETENTION}),
                        "application/json")
