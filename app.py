@@ -73,7 +73,12 @@ _prev_cpu = None  # (timestamp, total_jiffies, idle_jiffies)
 # them. Points are aggregate rates only — no prompt or generated text.
 HISTORY_FILE = os.environ.get("PANEL_HISTORY_FILE", "/app/data/history.jsonl")
 HISTORY_RETENTION = int(os.environ.get("PANEL_HISTORY_RETENTION_SECONDS", "86400"))
-_series = _deque()  # (timestamp, decode_tok_s, prefill_tok_s, kv_pct, gpu_pct)
+# (timestamp, decode, prefill, kv_pct, gpu_pct, vram_gb, temp_c, power_w,
+#  cpu_pct, disk_read_mbs). The last five use exactly the units the
+#  frontend live ticks push into its spark buffers, so seeded and live
+#  points share one scale. PCIe has no numeric series (link info only)
+#  and stays unseeded.
+_series = _deque()
 _last_file_prune = 0.0
 
 
@@ -89,17 +94,20 @@ def _history_load():
                 p = json.loads(line)
                 t = float(p["t"])
                 if t >= cutoff:
-                    _series.append((t, p.get("d"), p.get("p"), p.get("k"), p.get("g")))
+                    _series.append((t, p.get("d"), p.get("p"), p.get("k"), p.get("g"),
+                                    p.get("v"), p.get("e"), p.get("w"), p.get("c"), p.get("s")))
             except (ValueError, KeyError, TypeError):
                 continue
     except Exception:
         pass
 
 
-def _history_append(now, decode, prefill, kv_pct, gpu_pct):
+def _history_append(now, decode, prefill, kv_pct, gpu_pct,
+                    vram_gb=None, temp_c=None, power_w=None, cpu_pct=None, disk_read_mbs=None):
     """Append one point to memory and to the file; prune stale data."""
     global _last_file_prune
-    _series.append((now, decode, prefill, kv_pct, gpu_pct))
+    _series.append((now, decode, prefill, kv_pct, gpu_pct,
+                    vram_gb, temp_c, power_w, cpu_pct, disk_read_mbs))
     cutoff = now - HISTORY_RETENTION
     while _series and _series[0][0] < cutoff:
         _series.popleft()
@@ -108,12 +116,14 @@ def _history_append(now, decode, prefill, kv_pct, gpu_pct):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a") as fh:
             fh.write(json.dumps(
-                {"t": now, "d": decode, "p": prefill, "k": kv_pct, "g": gpu_pct}) + "\n")
+                {"t": now, "d": decode, "p": prefill, "k": kv_pct, "g": gpu_pct,
+                 "v": vram_gb, "e": temp_c, "w": power_w, "c": cpu_pct, "s": disk_read_mbs}) + "\n")
         if now - _last_file_prune > 3600:
             _last_file_prune = now
             with path.open("w") as fh:
-                for t, d, p, k, g in _series:
-                    fh.write(json.dumps({"t": t, "d": d, "p": p, "k": k, "g": g}) + "\n")
+                for t, d, p, k, g, v, e, w, c, s in _series:
+                    fh.write(json.dumps({"t": t, "d": d, "p": p, "k": k, "g": g,
+                                         "v": v, "e": e, "w": w, "c": c, "s": s}) + "\n")
     except Exception:
         pass  # history falls back to memory-only; never break polling
 
@@ -160,6 +170,123 @@ def _events_append(now, from_state, to_state, error):
                 {"t": now, "from": from_state, "to": to_state, "error": error}) + "\n")
     except Exception:
         pass  # events fall back to memory-only; never break polling
+
+
+# Panel-observed request history: NInfer has no request-history API, so
+# the panel records what its own /slots polling sees. One record per
+# slot episode: a slot id that disappears and later reappears is a NEW
+# record (slot ids are a reused pool; the panel cannot tell whether it
+# is the same request). Statuses are only "active" (in the latest
+# processing list) and "ended" (seen before, absent now) — never
+# "completed": NInfer does not report why a slot left. Only slot id,
+# prompt/cached lengths, window and first/last-seen times are stored;
+# prompt text is never in /slots and never stored here. Ended records
+# older than one hour are pruned; the file is rewritten only when a
+# record is created, ends, or is pruned, so normal polls do no disk I/O.
+REQUESTS_FILE = os.environ.get(
+    "PANEL_REQUESTS_FILE", str(Path(HISTORY_FILE).parent / "requests.json"))
+REQUESTS_WINDOW = 3600
+REQUESTS_CAP = 500
+_requests = []  # dicts: slot, prompt, cached, n_ctx, first, last, status
+_requests_active = {}  # slot id -> record, for currently processing slots
+_requests_pending = None  # slot id -> record, loaded active records awaiting first poll
+
+
+def _requests_load():
+    """Load persisted records at startup; never fatal."""
+    global _requests_pending
+    _requests_pending = {}
+    try:
+        path = Path(REQUESTS_FILE)
+        if not path.is_file():
+            return
+        cutoff = time.time() - REQUESTS_WINDOW
+        for line in path.read_text().splitlines():
+            try:
+                r = json.loads(line)
+                rec = {"slot": r["slot"], "prompt": int(r.get("prompt") or 0),
+                       "cached": int(r.get("cached") or 0), "n_ctx": int(r.get("n_ctx") or 0),
+                       "first": float(r["first"]), "last": float(r["last"]),
+                       "status": r.get("status") or "ended"}
+                if rec["status"] == "ended" and rec["last"] < cutoff:
+                    continue
+                _requests.append(rec)
+                if rec["status"] == "active":
+                    _requests_pending[rec["slot"]] = rec
+            except (ValueError, KeyError, TypeError):
+                continue
+        while len(_requests) > REQUESTS_CAP:
+            ended = [r for r in _requests if r["status"] == "ended"]
+            if not ended:
+                break
+            _requests.remove(min(ended, key=lambda r: r["last"]))
+    except Exception:
+        pass
+
+
+def _requests_save():
+    """Rewrite the whole file atomically; never fatal."""
+    try:
+        path = Path(REQUESTS_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w") as fh:
+            for r in _requests:
+                fh.write(json.dumps(r) + "\n")
+        tmp.replace(path)
+    except Exception:
+        pass  # requests fall back to memory-only; never break polling
+
+
+def _requests_update(details, now):
+    """Fold one successful /slots observation into the record list."""
+    global _requests_pending
+    with _lock:
+        dirty = False
+        if _requests_pending is not None:
+            # First poll after start: a loaded active record that is not
+            # processing now ended while the panel was down; its last-seen
+            # stays at the last pre-restart observation, not now.
+            current = {d["id"] for d in details}
+            for slot, rec in list(_requests_pending.items()):
+                if slot in current:
+                    _requests_active[slot] = rec
+                else:
+                    rec["status"] = "ended"
+                    dirty = True
+            _requests_pending = None
+        current_ids = {d["id"] for d in details}
+        for d in details:
+            rec = _requests_active.get(d["id"])
+            if rec is None:
+                rec = {"slot": d["id"], "prompt": d["prompt_tokens"],
+                       "cached": d["cached_tokens"], "n_ctx": d["n_ctx"],
+                       "first": now, "last": now, "status": "active"}
+                _requests.append(rec)
+                _requests_active[d["id"]] = rec
+                dirty = True
+            else:
+                rec["prompt"] = d["prompt_tokens"]
+                rec["cached"] = d["cached_tokens"]
+                rec["n_ctx"] = d["n_ctx"]
+                rec["last"] = now
+        for sid in list(_requests_active):
+            if sid not in current_ids:
+                _requests_active.pop(sid)["status"] = "ended"
+                dirty = True
+        before = len(_requests)
+        _requests[:] = [r for r in _requests
+                        if not (r["status"] == "ended" and r["last"] < now - REQUESTS_WINDOW)]
+        if len(_requests) != before:
+            dirty = True
+        while len(_requests) > REQUESTS_CAP:
+            ended = [r for r in _requests if r["status"] == "ended"]
+            if not ended:
+                break
+            _requests.remove(min(ended, key=lambda r: r["last"]))
+            dirty = True
+        if dirty:
+            _requests_save()
 
 
 # GUI-editable NInfer address. Precedence: GUI-saved value (settings.json
@@ -650,6 +777,7 @@ def _poll_once():
                 snap["slots"]["max_processing_prompt_tokens"] / max_ctx * 100.0
                 if max_ctx else None)
             snap["context"] = ctx
+            _requests_update(details, now)
     except Exception:
         pass
     snap["gpu"] = _gpu()
@@ -657,10 +785,18 @@ def _poll_once():
     snap["host_cpu"] = _host_cpu()
     snap["host_disk"] = _host_disk()
     gpu_util = None
+    vram_gb = temp_c = power_w = None
     if snap["gpu"].get("available") and snap["gpu"].get("cards"):
-        gpu_util = snap["gpu"]["cards"][0].get("util_percent")
+        card0 = snap["gpu"]["cards"][0]
+        gpu_util = card0.get("util_percent")
+        vram_gb = card0.get("mem_used_mb") / 1024.0 if card0.get("mem_used_mb") is not None else None
+        temp_c = card0.get("temp_c")
+        power_w = card0.get("power_w")
+    cpu_pct = snap["host_cpu"].get("util_percent") if snap["host_cpu"].get("available") else None
+    disk_read = snap["host_disk"].get("read_mbs") if snap["host_disk"].get("available") else None
     _history_append(now, decode_rate, prefill_rate,
-                    (kv_tokens / kv_cap * 100.0) if kv_cap else None, gpu_util)
+                    (kv_tokens / kv_cap * 100.0) if kv_cap else None, gpu_util,
+                    vram_gb, temp_c, power_w, cpu_pct, disk_read)
     return snap
 
 
@@ -736,19 +872,22 @@ class Handler(BaseHTTPRequestHandler):
                 span = max(1.0, pts[-1][0] - pts[0][0])
                 bucket = span / 720.0
                 grouped = {}
-                for t, d, p, k, g in pts:
-                    grouped.setdefault(int((t - pts[0][0]) / bucket), []).append((t, d, p, k, g))
+                for pt in pts:
+                    grouped.setdefault(int((pt[0] - pts[0][0]) / bucket), []).append(pt)
                 out = []
                 for vals in grouped.values():
                     def avg(idx):
                         vs = [v[idx] for v in vals if v[idx] is not None]
                         return sum(vs) / len(vs) if vs else None
                     out.append({"t": vals[len(vals) // 2][0], "decode": avg(1),
-                                "prefill": avg(2), "kv": avg(3), "gpu": avg(4)})
+                                "prefill": avg(2), "kv": avg(3), "gpu": avg(4),
+                                "vram": avg(5), "temp": avg(6), "power": avg(7),
+                                "cpu": avg(8), "disk": avg(9)})
                 pts = out
             else:
-                pts = [{"t": t, "decode": d, "prefill": p, "kv": k, "gpu": g}
-                       for t, d, p, k, g in pts]
+                pts = [{"t": t, "decode": d, "prefill": p, "kv": k, "gpu": g,
+                        "vram": v, "temp": e, "power": w, "cpu": c, "disk": s}
+                       for t, d, p, k, g, v, e, w, c, s in pts]
             self._send(200, json.dumps({"samples": pts, "minutes": minutes,
                                         "retention_seconds": HISTORY_RETENTION}),
                        "application/json")
@@ -767,6 +906,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"events": [
                 {"t": t, "from": f, "to": to, "error": e}
                 for t, f, to, e in list(_events)]}), "application/json")
+            return
+        if self.path == "/api/request-history":
+            with _lock:
+                reqs = [dict(r) for r in _requests]
+            self._send(200, json.dumps({"requests": reqs}), "application/json")
             return
         if self.path.startswith("/api/test-connection"):
             from urllib.parse import urlparse, parse_qs
@@ -804,6 +948,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     _history_load()
     _events_load()
+    _requests_load()
     _settings_load()
     threading.Thread(target=_poller, daemon=True).start()
     print(f"ninfer-live-panel: polling {_current_base()} every {POLL}s, listening on {BIND}:{PORT}",
