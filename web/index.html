@@ -66,7 +66,7 @@
   .dim-btn[data-active="true"]{color:var(--st-ink);border-color:var(--st-accent)}
   .dim-btn[data-active="false"]{opacity:.55}
   .hist-legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
-  #histCanvas{width:100%;height:190px;display:block}
+  #histCanvas{width:100%;height:240px;display:block}
   .hist-tip{position:absolute;pointer-events:none;background:var(--st-surface-2);border:1px solid var(--st-line);border-radius:8px;padding:6px 10px;font-size:12px;display:none;white-space:nowrap}
   .hist-wrap{position:relative}
   #gaugeTrack{stroke:var(--st-track)}
@@ -174,6 +174,9 @@
       <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
         <label class="small muted" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="notifyOfflineChk"/> <span data-i18n="notifyOffline"></span></label>
       </div>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <label class="small muted" style="display:flex;gap:8px;align-items:center"><input type="checkbox" id="hidePcieChk"/> <span data-i18n="hidePcie"></span></label>
+      </div>
       <p class="small muted" style="margin:10px 0 0" data-i18n="settingsHint"></p>
     </div>
   </div>
@@ -232,7 +235,7 @@
       <div><div class="st-metric__value"><span id="power">—</span><span class="st-metric__unit"> W</span></div><div class="monitor-metric__sub" id="powerSub">—</div></div>
       <div class="monitor-spark" id="powerSpark"></div>
     </section>
-    <section class="st-card monitor-metric" data-i18n-aria="pcie">
+    <section class="st-card monitor-metric" id="pcieCard" data-i18n-aria="pcie">
       <div class="st-metric__label"><span data-i18n="pcie"></span><span class="monitor-metric__source" id="pcieSource">—</span></div>
       <div><div class="st-metric__value"><span id="pcie">—</span><span class="st-metric__unit" id="pcieUnit"></span></div><div class="monitor-metric__sub" id="pcieSub">—</div></div>
       <div class="monitor-spark" id="pcieSpark"></div>
@@ -304,8 +307,8 @@
         <button type="button" class="dim-btn" data-dim="gpu" data-active="false"><i style="background:#a78bfa"></i><span data-i18n="legendGpu"></span></button>
       </div>
       <div class="range" id="histRange">
-        <button type="button" data-minutes="15" data-i18n="range15"></button>
-        <button type="button" data-minutes="60" data-active="true" data-i18n="range60"></button>
+        <button type="button" data-minutes="15" data-active="true" data-i18n="range15"></button>
+        <button type="button" data-minutes="60" data-i18n="range60"></button>
         <button type="button" data-minutes="1440" data-i18n="range1440"></button>
         <button type="button" id="range10080Btn" data-minutes="10080" data-i18n="range10080"></button>
       </div>
@@ -379,7 +382,7 @@ langSel.addEventListener('change', () => {
 });
 applyI18n();
 // 历史曲线：数据来自后端 /api/history（落盘），刷新不丢。
-let histMinutes = 60, histSamples = [];
+let histMinutes = 15, histSamples = [];
 let _histMarkers = []; // {x, text} for events inside the drawn window
 // Dimension selection, persisted in localStorage (default: decode + prefill,
 // the previous view). Toggling only redraws — samples already carry all dims.
@@ -424,7 +427,7 @@ async function fetchHistory(){
 function drawHistory(){
   const cv = $('histCanvas'), tip = $('histTip');
   if(!cv) return;
-  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 800, h = 190;
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 800, h = 240;
   if(cv.width !== w * dpr){ cv.width = w * dpr; cv.height = h * dpr; }
   const ctx = cv.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -432,8 +435,11 @@ function drawHistory(){
   const grid = cs.getPropertyValue('--st-line').trim() || 'rgba(128,128,128,.2)';
   const muted = cs.getPropertyValue('--st-ink-muted').trim() || '#888';
   ctx.clearRect(0, 0, w, h);
-  const DIMS = {decode:{color:'#10b981', rate:true}, prefill:{color:'#38bdf8', rate:true},
-    kv:{color:'#f59e0b', rate:false}, gpu:{color:'#a78bfa', rate:false}};
+  const _isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const DIMS = {decode:{color: _isLight ? '#059669' : '#10b981', rate:true},
+    prefill:{color: _isLight ? '#0284c7' : '#38bdf8', rate:true},
+    kv:{color: _isLight ? '#d97706' : '#f59e0b', rate:false},
+    gpu:{color: _isLight ? '#7c3aed' : '#a78bfa', rate:false}};
   const rateDims = histDims.filter(d => DIMS[d] && DIMS[d].rate);
   const pctDims = histDims.filter(d => DIMS[d] && !DIMS[d].rate);
   if(!histDims.length){
@@ -442,12 +448,13 @@ function drawHistory(){
     $('histStats').textContent = '';
     return;
   }
-  // Window domain, not sample min/max: switching 15 min / 1 h / 24 h must
-  // visibly change the axis even when total history is shorter than the window.
+  // Axis fits the data span when it is shorter than the selected window,
+  // so the curve always fills the chart; otherwise it uses the full window.
   // End at the newest sample (not browser clock, which may skew from the host).
   const lastT = histSamples.length ? histSamples[histSamples.length - 1].t : Date.now() / 1000;
   const t1 = Math.max(Date.now() / 1000, lastT);
-  const t0 = t1 - histMinutes * 60;
+  const dataT0 = histSamples.length ? histSamples[0].t : t1;
+  const t0 = (lastT - dataT0 < histMinutes * 60) ? dataT0 : t1 - histMinutes * 60;
   const pts = histSamples.filter(p => p.t >= t0 && histDims.some(d => p[d] !== null && p[d] !== undefined));
   if(pts.length < 2){
     ctx.fillStyle = muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
@@ -455,37 +462,75 @@ function drawHistory(){
     $('histStats').textContent = '';
     return;
   }
+  // Legend chips show each dimension's latest value, and their dots follow
+  // the theme-aware line palette.
+  document.querySelectorAll('#histLegend .dim-btn').forEach(b => {
+    const d = b.dataset.dim;
+    if(!DIMS[d]) return;
+    const dot = b.querySelector('i');
+    if(dot) dot.style.background = DIMS[d].color;
+    const span = b.querySelector('span');
+    if(!span) return;
+    for(let i = pts.length - 1; i >= 0; i--){
+      const v = pts[i][d];
+      if(v === null || v === undefined) continue;
+      const base = span.textContent.split(' · ')[0];
+      span.textContent = base + ' · ' + (DIMS[d].rate ? Number(v).toFixed(1) : Number(v).toFixed(1) + '%');
+      break;
+    }
+  });
   const rateMax = rateDims.length ? Math.max(1, ...pts.flatMap(p => rateDims.map(d => p[d] || 0))) * 1.1 : null;
   const padL = 8, padR = (rateDims.length && pctDims.length) ? 44 : 8, padT = 10, padB = 22, iw = w - padL - padR, ih = h - padT - padB;
   ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.fillStyle = muted; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'left';
   const leftMax = rateDims.length ? rateMax : 100;
-  for(let i = 0; i <= 3; i++){
-    const y = padT + ih * i / 3, v = leftMax * (1 - i / 3);
+  for(let i = 0; i <= 4; i++){
+    const y = padT + ih * i / 4, v = leftMax * (1 - i / 4);
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
     ctx.fillText((rateDims.length ? (v >= 100 ? Math.round(v) + '' : v.toFixed(1)) : Math.round(v) + '%'), padL, y - 3);
     if(rateDims.length && pctDims.length){
       ctx.textAlign = 'right';
-      ctx.fillText(Math.round(100 * (1 - i / 3)) + '%', w - 2, y - 3);
+      ctx.fillText(Math.round(100 * (1 - i / 4)) + '%', w - 2, y - 3);
       ctx.textAlign = 'left';
     }
   }
   const line = (key, color, scale) => {
-    ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 1.8; ctx.lineJoin = 'round';
-    let started = false;
+    ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
+    let seg = [];
+    const flush = () => {
+      if(!seg.length) return;
+      ctx.beginPath();
+      seg.forEach((pt, i) => { if(i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y); });
+      ctx.stroke();
+      if(seg.length > 1){
+        ctx.lineTo(seg[seg.length - 1].x, padT + ih);
+        ctx.lineTo(seg[0].x, padT + ih);
+        ctx.closePath();
+        ctx.globalAlpha = 0.12; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+      }
+      seg = [];
+    };
     pts.forEach(p => {
-      if(p[key] === null || p[key] === undefined) { started = false; return; }
+      if(p[key] === null || p[key] === undefined) { flush(); return; }
       const x = padL + (t1 > t0 ? (p.t - t0) / (t1 - t0) : 0) * iw;
       const y = padT + ih * (1 - p[key] / scale);
-      if(started) ctx.lineTo(x, y); else ctx.moveTo(x, y);
-      started = true;
+      seg.push({x, y});
     });
-    ctx.stroke();
+    flush();
   };
   histDims.forEach(d => { if(DIMS[d]) line(d, DIMS[d].color, DIMS[d].rate ? rateMax : 100); });
-  ctx.fillStyle = muted; ctx.textAlign = 'left';
-  ctx.fillText(new Date(t0 * 1000).toLocaleTimeString(), padL, h - 6);
-  ctx.textAlign = 'right';
-  ctx.fillText(new Date(t1 * 1000).toLocaleTimeString(), w - padR, h - 6);
+  ctx.fillStyle = muted; ctx.font = '11px system-ui, sans-serif';
+  const fmtAxisTime = (tt) => {
+    const d = new Date(tt * 1000), span = t1 - t0;
+    if(span >= 86400) return d.toLocaleDateString([], {month:'numeric', day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    if(span >= 3600) return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    return d.toLocaleTimeString();
+  };
+  for(let i = 0; i <= 4; i++){
+    const tt = t0 + (t1 - t0) * i / 4;
+    const xx = padL + iw * i / 4;
+    ctx.textAlign = i === 0 ? 'left' : (i === 4 ? 'right' : 'center');
+    ctx.fillText(fmtAxisTime(tt), xx, h - 6);
+  }
   // Window stats, computed only from the samples already drawn (no new calls).
   const _avg = (key) => {
     const vs = pts.map(p => p[key]).filter(v => v !== null && v !== undefined);
@@ -497,7 +542,7 @@ function drawHistory(){
   };
   const statParts = [];
   if(rateDims.includes('decode')){ const a = _avg('decode'), p = _peak('decode'); if(a !== null) statParts.push(T().histTipDecode + ' ' + T().statAvg + ' ' + fmtRateNum(a) + ' tok/s · ' + T().statPeak + ' ' + fmtRateNum(p) + ' tok/s'); }
-  if(rateDims.includes('prefill')){ const a = _avg('prefill'), p = _peak('prefill'); if(a !== null) statParts.push(T().histTipPrefill + ' ' + T().statAvg + ' ' + fmtRateNum(a) + ' tok/s · ' + T().statPeak + ' ' + fmtRateNum(p) + ' tok/s'); }
+  if(rateDims.includes('prefill')){ const a = _avg('prefill'), p = _peak('prefill'); if(a !== null) statParts.push(T().histTipPrefill + ' ' + T().statAvg + ' ' + fmtRateRaw(a) + ' tok/s · ' + T().statPeak + ' ' + fmtRateRaw(p) + ' tok/s'); }
   if(pctDims.includes('kv')){ const a = _avg('kv'); if(a !== null) statParts.push(T().histTipKv + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
   if(pctDims.includes('gpu')){ const a = _avg('gpu'); if(a !== null) statParts.push(T().histTipGpu + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
   $('histStats').textContent = statParts.join(' · ');
@@ -537,7 +582,7 @@ function drawHistory(){
       const tipParts = histDims.map(d => {
         const v = best[d];
         if(d === 'decode') return T().histTipDecode + ' ' + fmtRateNum(v) + ' tok/s';
-        if(d === 'prefill') return T().histTipPrefill + ' ' + fmtRateNum(v) + ' tok/s';
+        if(d === 'prefill') return T().histTipPrefill + ' ' + fmtRateRaw(v) + ' tok/s';
         if(d === 'kv') return T().histTipKv + ' ' + fmtPct1(v);
         return T().histTipGpu + ' ' + fmtPct1(v);
       });
@@ -564,6 +609,9 @@ const fmtRateNum = v => {
   const n = Number(v);
   return n >= 1000 ? (n / 1000).toFixed(2) + 'k' : n.toFixed(1);
 };
+// Prefill rates never shorten to k (v0.1.5): prefill runs into the thousands
+// and the raw number is wanted; decode keeps the k rule above.
+const fmtRateRaw = v => has(v) ? Number(v).toFixed(1) : '—';
 const fmtBytes = b => {
   if(!has(b)) return '—';
   const n = Number(b);
@@ -623,7 +671,7 @@ function _reqRowHtml(d, past){
   const share = _lastMaxCtx ? (d.prompt_tokens / _lastMaxCtx * 100) : null;
   const status = past ? T().reqEnded.replace('{t}', new Date(d.last * 1000).toLocaleTimeString()) : T().reqActive;
   return '<tr' + (past ? ' class="req-past"' : '') + '><td>#' + d.id + '</td><td class="num" title="' + d.prompt_tokens.toLocaleString() + '">' + fmtTok(d.prompt_tokens) +
-    '</td><td class="num" title="' + d.cached_tokens.toLocaleString() + '">' + fmtTok(d.cached_tokens) +
+    '</td><td class="num" title="' + d.cached_tokens.toLocaleString() + '">' + fmtTok(d.cached_tokens) + (d.prompt_tokens ? ' · ' + (d.cached_tokens / d.prompt_tokens * 100).toFixed(1) + '%' : '') +
     '</td><td class="num" title="' + (d.n_ctx ? d.n_ctx.toLocaleString() : '') + '">' + (d.n_ctx ? fmtTok(d.n_ctx) : '—') +
     '</td><td class="num">' + (share !== null ? share.toFixed(1) + '%' : '—') + '</td><td>' + status + '</td></tr>';
 }
@@ -689,7 +737,7 @@ async function tick(){
   else { bar.className=''; bar.style.width='0%'; $('progressNote').textContent=''; }
   // 解码 / 预填充卡（0.1.4 起拆成两张，各画一条单线迷你曲线）
   $('decode').textContent=fmtRateNum(inst.decode_tok_s);
-  $('prefill').textContent=fmtRateNum(inst.prefill_tok_s);
+  $('prefill').textContent=fmtRateRaw(inst.prefill_tok_s);
   $('decodeSub').textContent = phase==='generating' ? T().decodeSubDecoding : T().decodeSubLast;
   $('prefillSub').textContent = phase==='reading' ? T().prefillSubReading : (phase==='generating' ? T().prefillSubGenerating : T().prefillSubLast);
   $('decodeSource').textContent = s.ninfer_ok ? T().measured : T().unavailable;
@@ -764,7 +812,7 @@ async function tick(){
   $('lastCacheText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?(T().lastCacheReuse.replace('{x}', fmtTok(s.counters.reused_prompt_tokens))):T().reuseNotReported;
   $('reusedTotalText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?fmtTok(s.counters.reused_prompt_tokens):'—';
   if(m.requests_total!==undefined && m.requests_total!==null){
-    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateNum(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0)) + (_pastEndedCount !== null ? T().reqPastEnded.replace('{n}', _pastEndedCount) : '');
+    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateRaw(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0)) + (_pastEndedCount !== null ? T().reqPastEnded.replace('{n}', _pastEndedCount) : '');
   }
   fetchHistory().then(drawHistory);
   if(_prevOnline === true && !s.ninfer_ok){
@@ -865,6 +913,17 @@ notifyChk.addEventListener('change', async () => {
     if(perm !== 'granted') notifyChk.checked = false;
   }
   try{ localStorage.setItem('ninfer-panel-notify-offline', notifyChk.checked ? '1' : '0'); }catch(e){}
+});
+// PCIe card visibility: opt-in hide, stored locally like other view prefs.
+// Default is shown; hiding only removes the card from the grid, polling
+// and snapshots are untouched.
+const hidePcieChk = $('hidePcieChk');
+function applyPcieVisibility(){ const card = $('pcieCard'); if(card) card.style.display = hidePcieChk.checked ? 'none' : ''; }
+try{ hidePcieChk.checked = localStorage.getItem('ninfer-panel-hide-pcie') === '1'; }catch(e){}
+applyPcieVisibility();
+hidePcieChk.addEventListener('change', () => {
+  try{ localStorage.setItem('ninfer-panel-hide-pcie', hidePcieChk.checked ? '1' : '0'); }catch(e){}
+  applyPcieVisibility();
 });
 // Display refresh interval only (backend sampling stays at its own POLL).
 // Stored in localStorage; the backend history point density is unaffected.
