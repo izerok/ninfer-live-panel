@@ -443,10 +443,10 @@ function drawHistory(){
     ctx.stroke();
   };
   histDims.forEach(d => { if(DIMS[d]) line(d, DIMS[d].color, DIMS[d].rate ? rateMax : 100); });
-  ctx.fillStyle = muted; ctx.textAlign = 'right';
-  ctx.fillText(new Date(t0 * 1000).toLocaleTimeString(), w - padR, h - 6);
-  ctx.textAlign = 'left';
-  ctx.fillText(new Date(t1 * 1000).toLocaleTimeString(), padL, h - 6);
+  ctx.fillStyle = muted; ctx.textAlign = 'left';
+  ctx.fillText(new Date(t0 * 1000).toLocaleTimeString(), padL, h - 6);
+  ctx.textAlign = 'right';
+  ctx.fillText(new Date(t1 * 1000).toLocaleTimeString(), w - padR, h - 6);
   cv.onmousemove = (ev) => {
     const rect = cv.getBoundingClientRect();
     const x = ev.clientX - rect.left;
