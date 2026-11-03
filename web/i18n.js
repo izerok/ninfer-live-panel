@@ -54,7 +54,7 @@ const I18N = {
     versionLabel:'版本', langAria:'语言 / Language', themeAria:'切换深浅色', closeAria:'关闭', uptimeLabel:'运行', diskWriteGb:'写入 {x} GB/s', updateCheckOff:' · 已关闭升级检查', updateAvailable:'有新版本可用：{v}', viewRelease:'查看 Release',
     requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} · 当前处理中 {cur} 个 · 排队 {q} 个',
     exportCsv:'导出 CSV', statAvg:'平均', statPeak:'峰值', testConn:'测试连接', testConnOk:'连接正常（/health {s}）', testConnFail:'连接失败：{e}', pollInterval:'刷新间隔', seconds:'秒', checkUpdate:'检查更新', updateLatest:'已是最新版本', updateCheckFailed:'检查失败，请稍后再试', events:'状态事件', eventsEmpty:'暂无状态变化事件',
-    range10080:'7 天', lastOnline:'上次在线 {t}', offlineFor:'已离线 {d}', notifyOffline:'离线时发浏览器通知', notifyOfflineTitle:'NInfer 离线', notifyOfflineBody:'面板检测到 NInfer 已离线'
+    range10080:'7 天', lastOnline:'上次在线 {t}', offlineFor:'已离线 {d}', notifyOffline:'离线时发浏览器通知', hidePcie:'隐藏 PCIe 卡片', notifyOfflineTitle:'NInfer 离线', notifyOfflineBody:'面板检测到 NInfer 已离线'
   },
   'en': {
     title:'Monitor', modelState:'Model state', modelProgress:'Model progress',
@@ -99,7 +99,7 @@ const I18N = {
     versionLabel:'Version', langAria:'Language', themeAria:'Toggle theme', closeAria:'Close', uptimeLabel:'Uptime', diskWriteGb:'Write {x} GB/s', updateCheckOff:' · update check off', updateAvailable:'A new version is available: {v}', viewRelease:'View release',
     requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} · in flight {cur} · queued {q}',
     exportCsv:'Export CSV', statAvg:'Avg', statPeak:'Peak', testConn:'Test connection', testConnOk:'Connection OK (/health {s})', testConnFail:'Connection failed: {e}', pollInterval:'Refresh interval', seconds:'s', checkUpdate:'Check for updates', updateLatest:'Already up to date', updateCheckFailed:'Update check failed, try again later', events:'State events', eventsEmpty:'No state changes yet',
-    range10080:'7 days', lastOnline:'Last online {t}', offlineFor:'Offline for {d}', notifyOffline:'Notify in browser when offline', notifyOfflineTitle:'NInfer offline', notifyOfflineBody:'The panel detected NInfer is offline'
+    range10080:'7 days', lastOnline:'Last online {t}', offlineFor:'Offline for {d}', notifyOffline:'Notify in browser when offline', hidePcie:'Hide PCIe card', notifyOfflineTitle:'NInfer offline', notifyOfflineBody:'The panel detected NInfer is offline'
   }
 };
 if (typeof window !== 'undefined') window.I18N = I18N;
