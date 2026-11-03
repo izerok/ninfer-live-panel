@@ -56,7 +56,7 @@ The curve contains only aggregate rates (decode / prefill tok/s, KV usage, GPU l
 
 - The button in the top right switches dark / light. Before the user chooses, it follows the system; once chosen, the choice is stored in browser `localStorage`.
 - The language selector in the top right switches 中文 / English, also stored in `localStorage`. Before a choice, the browser language decides (Chinese → Chinese, anything else → English). All UI strings come from one dictionary in the frontend; no external language pack is loaded.
-- To add a language: add a section to the `I18N` dictionary in `web/index.html` and an option to the language selector. Missing keys fall back to Chinese.
+- To add a language: add a section to the `I18N` dictionary in `web/i18n.js` and an option to the language selector. Missing keys fall back to Chinese. **`web/index.html` contains no UI strings at all**: every visible text and aria-label is filled from `i18n.js` via `data-i18n` / `data-i18n-aria`, so editing copy means editing `i18n.js` only.
 
 ## Data sources and definitions
 

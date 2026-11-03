@@ -1,0 +1,95 @@
+// NInfer live panel — UI strings, maintained separately from web/index.html.
+// HOW TO MAINTAIN:
+// - Edit translations here only. web/index.html contains NO UI strings:
+//   every user-facing text is filled from this dict via data-i18n (text)
+//   or data-i18n-aria (aria-label) by applyI18n() in index.html.
+// - To add a language: add a section below (copy 'en', translate values),
+//   then add an <option> to #langSel in index.html. Keys missing from a
+//   language fall back to Chinese (see applyI18n()).
+// - Dynamic strings (phase text, totals, tooltips) use T().<key> in JS;
+//   add their keys here, never as literals in index.html.
+// - Language names in the #langSel <option> labels (中文 / English) are
+//   proper names and stay in index.html by design.
+const I18N = {
+  'zh-CN': {
+    title:'监控', modelState:'模型状态', modelProgress:'模型进度',
+    speed:'速度', gpuLoad:'GPU 负载', vram:'显存', temp:'GPU 温度', power:'功率',
+    pcie:'PCIe', cpu:'CPU', diskRead:'磁盘读取',
+    history:'历史曲线', legendDecode:'解码 tok/s', legendPrefill:'预填充 tok/s',
+    range15:'15 分钟', range60:'1 小时', range1440:'24 小时',
+    histNote:'曲线是后端每 2 秒采样的聚合速度，写盘保存在面板数据卷里：刷新页面、重启容器都不会丢，面板重启后从盘里续上。只保留最近 24 小时，不含任何提示词或生成内容。',
+    histCollecting:'采集中…（至少两次采样后画出曲线，刷新页面不会丢）',
+    context:'上下文占用', kvCache:'KV 缓存', sysMem:'系统内存', gpuTemp:'GPU 温度',
+    contextNote:'上下文占用取处理中请求的最长 prompt / 窗口上限；无进行中请求时为 0。KV 缓存一栏是 NInfer 的对应项，Strata 原栏为“显存中的专家”。',
+    currentReq:'当前请求', slot:'Slot', prompt:'Prompt', cached:'缓存复用', ctxWindow:'上下文窗口', shareWindow:'占窗口',
+    currentNote:'NInfer 不提供历史请求接口，也不提供排队请求的逐条明细：本表只列当前处理中的 slot（来自 /slots），排队只给个数。/slots 没有已生成 token 数，所以这里只有 prompt 长度，没有输出 token 数。',
+    cache:'对话缓存', parkedSessions:'保留的会话', theirMem:'他们的内存（宿主 KV）',
+    cacheNote:'保留的 slot 可从已保存状态恢复。NInfer 的上下文缓存细节见上下文占用一栏；本栏的“保留的会话”即 /slots 的 retained slot 数。',
+    footerNote:'本页按 Strata host Monitor 的版式复刻，数据源是本地 NInfer（只 GET /health、/v1/load、/stats、/metrics、/slots，不发任何生成、加载、卸载请求，不部署任何推理框架）。NInfer 状态映射到 Strata 五态：空闲→空闲，预填充中→正在读取，生成中→正在生成，排队→排队中，离线→错误。单请求进度、历史请求、专家缓存、PCIe 传输速率是 Strata 有而 NInfer 不提供的字段，本页不造数，完整适配清单见 README。',
+    badgeIdle:'空闲', badgeReading:'正在读取', badgeGenerating:'正在生成', badgeQueued:'排队中', badgeError:'错误',
+    phaseIdle:'等待请求', phaseReading:'正在读取', phaseGenerating:'正在生成', phaseQueued:'排队中', phaseError:'错误',
+    waitingDetail:'等待引擎遥测…', noModel:'未加载模型',
+    errPrefix:'NInfer 不可达：', errSuffix:'。面板不会替你启动它，请先确认本地 ninfer-unc 在跑、端口与 NINFER_BASE_URL 对得上。',
+    measured:'实测', unavailable:'不可用',
+    decodeSubDecoding:'正在解码', decodeSubLast:'上次请求解码',
+    prefillSubReading:'正在预填充', prefillSubGenerating:'本次请求预填充', prefillSubLast:'上次请求预填充',
+    pcieLink:'当前链路 · 传输速率未报告', pcieUnavailable:'传输到 GPU 不可用',
+    powerGpu:'GPU 功率', diskReadSub:'读取吞吐', hostCpu:'宿主 CPU',
+    gaugeNoReq:'无进行中的请求', reuseNotReported:'复用未报告',
+    curOffline:'NInfer 离线，当前请求不可见', curNone:'当前无处理中请求',
+    themeDark:'深色', themeLight:'浅色',
+    noProgress:'NInfer 不报告单请求进度',
+    settings:'设置', currentLabel:'当前生效地址', save:'保存',
+    saved:'已保存，正在用新地址轮询', invalidAddress:'地址无效：请填 http://主机:端口 这样的地址，不要带用户名密码',
+    settingsHint:'改这里不用改 compose、不用重启面板；保存后立即用新地址轮询，并写到数据卷里，刷新和重启都不会丢。没保存过时，用环境变量或默认地址。',
+    unknown:'未知错误', detailPrefilling:'正在预填充 · {n} 个请求',
+    detailGenerating:'正在生成 · {d} tok/s · 在跑 {n} 个',
+    detailQueued:'排队 {n} 个', detailLongest:' · 最长 prompt {x} tokens',
+    diskWrite:'写入 {x} MB/s', gaugeLongest:'最长 prompt {a} / {b}',
+    curQueued:' · 排队 {n} 个（排队请求无逐条明细）',
+    lastCacheReuse:'累计复用 {x}', lastReq:'上次请求', reusedSince:'自启动以来复用',
+    versionLabel:'版本', langAria:'语言 / Language', themeAria:'切换深浅色', closeAria:'关闭', uptimeLabel:'运行', diskWriteGb:'写入 {x} GB/s', updateCheckOff:' · 已关闭升级检查', updateAvailable:'有新版本可用：{v}', viewRelease:'查看 Release',
+    requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} · 当前处理中 {cur} 个 · 排队 {q} 个'
+  },
+  'en': {
+    title:'Monitor', modelState:'Model state', modelProgress:'Model progress',
+    speed:'Speed', gpuLoad:'GPU load', vram:'VRAM', temp:'GPU temp', power:'Power',
+    pcie:'PCIe', cpu:'CPU', diskRead:'Disk read',
+    history:'History', legendDecode:'Decode tok/s', legendPrefill:'Prefill tok/s',
+    range15:'15 min', range60:'1 hour', range1440:'24 hours',
+    histNote:'The curve is sampled by the backend every 2 s and persisted to the panel data volume: it survives page refreshes, container restarts, and recreates, and resumes from disk after a panel restart. Only the last 24 hours are kept. It contains no prompt or generated text.',
+    histCollecting:'Collecting… (the curve appears after at least two samples; refreshing the page will not lose it)',
+    context:'Context usage', kvCache:'KV cache', sysMem:'System memory', gpuTemp:'GPU temp',
+    contextNote:'Context usage is the longest in-flight prompt / window limit; 0 when nothing is in flight. The KV cache row is the NInfer counterpart of Strata\u2019s “experts in VRAM” row.',
+    currentReq:'Current requests', slot:'Slot', prompt:'Prompt', cached:'Cached', ctxWindow:'Context window', shareWindow:'Share of window',
+    currentNote:'NInfer provides no request-history API and no per-request detail for queued requests: this table lists only in-flight slots (from /slots), and queued requests are shown as a count only. /slots has no generated-token count, so only prompt length is shown, not output tokens.',
+    cache:'Conversation cache', parkedSessions:'Parked sessions', theirMem:'Their memory (host KV)',
+    cacheNote:'Parked slots can resume from saved state. See the context section for NInfer cache details; “parked sessions” here is the /slots retained-slot count.',
+    footerNote:'This page replicates the layout of Strata\u2019s host Monitor screen; its data source is a local NInfer server (only GET /health, /v1/load, /stats, /metrics, /slots — no generation, load, or unload requests, and no inference framework is deployed). NInfer states map to Strata\u2019s five states: idle \u2192 idle, prefilling \u2192 reading, generating \u2192 generating, queued \u2192 queued, offline \u2192 error. Per-request progress, request history, expert cache, and PCIe transfer rate exist in Strata but not in NInfer, so this page does not invent them; see the README for the full mapping.',
+    badgeIdle:'Idle', badgeReading:'Reading', badgeGenerating:'Generating', badgeQueued:'Queued', badgeError:'Error',
+    phaseIdle:'Waiting for requests', phaseReading:'Reading', phaseGenerating:'Generating', phaseQueued:'Queued', phaseError:'Error',
+    waitingDetail:'Waiting for engine telemetry…', noModel:'No model loaded',
+    errPrefix:'NInfer unreachable: ', errSuffix:'. The panel will not start it for you; check that your local ninfer-unc is running and that the port matches NINFER_BASE_URL.',
+    measured:'Live', unavailable:'Unavailable',
+    decodeSubDecoding:'Decoding', decodeSubLast:'Last decode',
+    prefillSubReading:'Prefilling', prefillSubGenerating:'Prefill of this request', prefillSubLast:'Last prefill',
+    pcieLink:'Current link · transfer rate not reported', pcieUnavailable:'Transfer to GPU unavailable',
+    powerGpu:'GPU power', diskReadSub:'Read throughput', hostCpu:'Host CPU',
+    gaugeNoReq:'No in-flight requests', reuseNotReported:'Reuse not reported',
+    curOffline:'NInfer offline, current requests not visible', curNone:'No in-flight requests',
+    themeDark:'Dark', themeLight:'Light',
+    noProgress:'NInfer does not report per-request progress',
+    settings:'Settings', currentLabel:'Effective address', save:'Save',
+    saved:'Saved, polling the new address now', invalidAddress:'Invalid address: use http://host:port without credentials',
+    settingsHint:'No compose edit or panel restart needed: the new address takes effect immediately and is saved to the data volume, so it survives refreshes and restarts. Before anything is saved, the environment variable or the default address is used.',
+    unknown:'Unknown error', detailPrefilling:'Prefilling · {n} requests',
+    detailGenerating:'Generating · {d} tok/s · {n} running',
+    detailQueued:'Queued {n}', detailLongest:' · longest prompt {x} tokens',
+    diskWrite:'Write {x} MB/s', gaugeLongest:'Longest prompt {a} / {b}',
+    curQueued:' · queued {n} (no per-request detail for queued requests)',
+    lastCacheReuse:'Cumulative reuse {x}', lastReq:'Last request', reusedSince:'Reused since startup',
+    versionLabel:'Version', langAria:'Language', themeAria:'Toggle theme', closeAria:'Close', uptimeLabel:'Uptime', diskWriteGb:'Write {x} GB/s', updateCheckOff:' · update check off', updateAvailable:'A new version is available: {v}', viewRelease:'View release',
+    requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} · in flight {cur} · queued {q}'
+  }
+};
+if (typeof window !== 'undefined') window.I18N = I18N;
