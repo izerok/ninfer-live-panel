@@ -155,6 +155,20 @@
         <button class="theme-btn" id="saveBaseBtn" type="button" data-i18n="save"></button>
       </div>
       <div class="small" id="settingsMsg" style="margin-top:10px"></div>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button class="theme-btn" id="testConnBtn" type="button" data-i18n="testConn"></button>
+        <span class="small" id="testConnMsg"></span>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <span class="small muted" data-i18n="pollInterval"></span>
+        <input id="pollIntervalInput" type="number" min="1" max="10" step="1"
+          style="width:70px;background:var(--st-surface-2);color:var(--st-ink);border:1px solid var(--st-line);border-radius:10px;padding:8px 10px;font-size:14px"/>
+        <span class="small muted" data-i18n="seconds"></span>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button class="theme-btn" id="checkUpdateBtn" type="button" data-i18n="checkUpdate"></button>
+        <span class="small" id="updateCheckMsg"></span>
+      </div>
       <p class="small muted" style="margin:10px 0 0" data-i18n="settingsHint"></p>
     </div>
   </div>
@@ -243,12 +257,21 @@
         <button type="button" data-minutes="60" data-active="true" data-i18n="range60"></button>
         <button type="button" data-minutes="1440" data-i18n="range1440"></button>
       </div>
+      <button type="button" class="theme-btn" id="exportHistBtn" data-i18n="exportCsv"></button>
     </div>
     <div class="hist-wrap">
       <canvas id="histCanvas"></canvas>
       <div class="hist-tip" id="histTip"></div>
     </div>
+    <div class="small" id="histStats" style="margin-top:8px"></div>
     <p class="small muted" style="margin:10px 0 0" data-i18n="histNote"></p>
+  </section>
+
+  <!-- 状态事件：只记轮询到的状态变化，不新增 NInfer 调用 -->
+  <section class="st-card" data-i18n-aria="events">
+    <h2 data-i18n="events"></h2>
+    <ul id="eventList" style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8"></ul>
+    <p class="small muted" id="eventsEmpty" style="display:none" data-i18n="eventsEmpty"></p>
   </section>
 
   <!-- 上下文占用 + 当前请求 -->
@@ -402,6 +425,7 @@ function drawHistory(){
   if(!histDims.length){
     ctx.fillStyle = muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(T().histNoDims, w / 2, h / 2);
+    $('histStats').textContent = '';
     return;
   }
   // Window domain, not sample min/max: switching 15 min / 1 h / 24 h must
@@ -414,6 +438,7 @@ function drawHistory(){
   if(pts.length < 2){
     ctx.fillStyle = muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(T().histCollecting, w / 2, h / 2);
+    $('histStats').textContent = '';
     return;
   }
   const rateMax = rateDims.length ? Math.max(1, ...pts.flatMap(p => rateDims.map(d => p[d] || 0))) * 1.1 : null;
@@ -447,6 +472,21 @@ function drawHistory(){
   ctx.fillText(new Date(t0 * 1000).toLocaleTimeString(), padL, h - 6);
   ctx.textAlign = 'right';
   ctx.fillText(new Date(t1 * 1000).toLocaleTimeString(), w - padR, h - 6);
+  // Window stats, computed only from the samples already drawn (no new calls).
+  const _avg = (key) => {
+    const vs = pts.map(p => p[key]).filter(v => v !== null && v !== undefined);
+    return vs.length ? vs.reduce((a, b) => a + b, 0) / vs.length : null;
+  };
+  const _peak = (key) => {
+    const vs = pts.map(p => p[key]).filter(v => v !== null && v !== undefined);
+    return vs.length ? Math.max(...vs) : null;
+  };
+  const statParts = [];
+  if(rateDims.includes('decode')){ const a = _avg('decode'), p = _peak('decode'); if(a !== null) statParts.push(T().histTipDecode + ' ' + T().statAvg + ' ' + fmtRateNum(a) + ' tok/s · ' + T().statPeak + ' ' + fmtRateNum(p) + ' tok/s'); }
+  if(rateDims.includes('prefill')){ const a = _avg('prefill'), p = _peak('prefill'); if(a !== null) statParts.push(T().histTipPrefill + ' ' + T().statAvg + ' ' + fmtRateNum(a) + ' tok/s · ' + T().statPeak + ' ' + fmtRateNum(p) + ' tok/s'); }
+  if(pctDims.includes('kv')){ const a = _avg('kv'); if(a !== null) statParts.push(T().histTipKv + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
+  if(pctDims.includes('gpu')){ const a = _avg('gpu'); if(a !== null) statParts.push(T().histTipGpu + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
+  $('histStats').textContent = statParts.join(' · ');
   cv.onmousemove = (ev) => {
     const rect = cv.getBoundingClientRect();
     const x = ev.clientX - rect.left;
@@ -715,7 +755,105 @@ _settingsModal.addEventListener('click', e => { if(e.target === _settingsModal) 
 document.addEventListener('keydown', e => { if(e.key === 'Escape') _closeSettings(); });
 loadSettings(); fetchVersion();
 window.addEventListener('resize', drawHistory);
-tick(); setInterval(tick, 2000);
+// Settings: test-connection (health only, no API key, never auto-saves).
+$('testConnBtn').addEventListener('click', async () => {
+  const msg = $('testConnMsg');
+  const base = $('baseUrlInput').value.trim() || $('currentBase').textContent;
+  try{
+    const resp = await fetch('/api/test-connection?base_url=' + encodeURIComponent(base));
+    const j = await resp.json();
+    if(!resp.ok) throw new Error(j.error || 'bad');
+    if(j.ok){ msg.style.color = 'var(--st-accent-text)'; msg.textContent = T().testConnOk.replace('{s}', j.http); }
+    else { msg.style.color = 'var(--st-danger-text)'; msg.textContent = T().testConnFail.replace('{e}', j.error || ''); }
+  }catch(e){
+    msg.style.color = 'var(--st-danger-text)'; msg.textContent = T().testConnFail.replace('{e}', String(e));
+  }
+});
+// Settings: manual update check (force=1 bypasses the backend 1h cache).
+$('checkUpdateBtn').addEventListener('click', async () => {
+  const msg = $('updateCheckMsg');
+  try{
+    _updateData = await (await fetch('/api/update-check?force=1')).json();
+    renderUpdateBanner();
+    if(!_updateData.enabled) msg.textContent = T().updateCheckOff;
+    else if(_updateData.update_available) msg.textContent = T().updateAvailable.replace('{v}', _updateData.latest);
+    else msg.textContent = T().updateLatest;
+  }catch(e){
+    msg.textContent = T().updateCheckFailed;
+  }
+});
+// Display refresh interval only (backend sampling stays at its own POLL).
+// Stored in localStorage; the backend history point density is unaffected.
+let pollMs = (() => {
+  try{
+    const v = parseInt(localStorage.getItem('ninfer-panel-poll-ms'), 10);
+    if(v >= 1000 && v <= 10000) return v;
+  }catch(e){}
+  return 2000;
+})();
+let pollTimer = null;
+function restartPoll(){
+  if(pollTimer) clearInterval(pollTimer);
+  pollTimer = setInterval(() => { tick(); fetchEvents(); }, pollMs);
+}
+$('pollIntervalInput').value = pollMs / 1000;
+$('pollIntervalInput').addEventListener('change', () => {
+  let sec = parseInt($('pollIntervalInput').value, 10);
+  if(!isFinite(sec)) sec = 2;
+  sec = Math.max(1, Math.min(10, sec));
+  $('pollIntervalInput').value = sec;
+  pollMs = sec * 1000;
+  try{ localStorage.setItem('ninfer-panel-poll-ms', String(pollMs)); }catch(e){}
+  restartPoll();
+});
+// History export: CSV from the samples already fetched for this window.
+$('exportHistBtn').addEventListener('click', () => {
+  const lastT = histSamples.length ? histSamples[histSamples.length - 1].t : Date.now() / 1000;
+  const t1 = Math.max(Date.now() / 1000, lastT);
+  const t0 = t1 - histMinutes * 60;
+  const header = ['time', ...histDims.map(d => ({decode:'decode_tok_s', prefill:'prefill_tok_s', kv:'kv_pct', gpu:'gpu_pct'}[d]))].join(',');
+  const lines = [header];
+  histSamples.filter(p => p.t >= t0).forEach(p => {
+    lines.push([new Date(p.t * 1000).toISOString(), ...histDims.map(d => (p[d] === null || p[d] === undefined) ? '' : p[d])].join(','));
+  });
+  const blob = new Blob([lines.join('\n')], {type: 'text/csv'});
+  const a = document.createElement('a');
+  const stamp = new Date().toISOString().replace(/[:.]/g, '').slice(0, 15);
+  a.href = URL.createObjectURL(blob);
+  a.download = `ninfer-history-${histMinutes}min-${stamp}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+});
+// State events: throttled to at most one fetch per 10 s; missing data
+// never breaks the main panel.
+let _lastEventsFetch = 0, _eventsCache = [];
+function stateLabel(s){
+  return {idle:T().badgeIdle, warming:T().badgeReading, generating:T().badgeGenerating,
+    queued:T().badgeQueued, offline:T().badgeError}[s] || s;
+}
+function renderEvents(){
+  const ul = $('eventList'), empty = $('eventsEmpty');
+  ul.innerHTML = '';
+  const recent = [..._eventsCache].reverse().slice(0, 20);
+  empty.style.display = recent.length ? 'none' : 'block';
+  recent.forEach(e => {
+    const li = document.createElement('li');
+    li.textContent = new Date(e.t * 1000).toLocaleString() + ' ' +
+      stateLabel(e.from) + ' → ' + stateLabel(e.to) + (e.error ? ' · ' + e.error : '');
+    ul.appendChild(li);
+  });
+}
+async function fetchEvents(){
+  const now = Date.now();
+  if(now - _lastEventsFetch < 10000 && _eventsCache.length) return;
+  _lastEventsFetch = now;
+  try{
+    const j = await (await fetch('/api/events')).json();
+    _eventsCache = j.events || [];
+    renderEvents();
+  }catch(e){ /* events missing never breaks the main panel */ }
+}
+tick(); fetchEvents(); restartPoll();
 </script>
 </body>
 </html>
