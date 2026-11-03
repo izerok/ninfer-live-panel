@@ -126,6 +126,7 @@ EVENTS_FILE = os.environ.get(
     "PANEL_EVENTS_FILE", str(Path(HISTORY_FILE).parent / "events.jsonl"))
 _events = _deque()  # (timestamp, from_state, to_state, error_or_None)
 _prev_event_state = None
+_last_ok = None  # timestamp of the last successful poll; None until first success
 
 
 def _events_load():
@@ -481,10 +482,10 @@ def _host_mem():
 
 
 def _poll_once():
-    global _prev
+    global _prev, _last_ok
     now = time.time()
     snap = {"as_of": now, "ninfer_base_url": _current_base(), "ninfer_ok": False,
-            "state": "offline", "error": None}
+            "state": "offline", "error": None, "last_ok": _last_ok}
     try:
         status, health_body = _get("/health", timeout=3)
         health = json.loads(health_body) if health_body.strip().startswith("{") else {}
@@ -505,6 +506,8 @@ def _poll_once():
         return snap
 
     snap["ninfer_ok"] = True
+    _last_ok = now
+    snap["last_ok"] = now
     req = load.get("requests", {}) or {}
     occ = load.get("occupancy", {}) or {}
     cap = load.get("capacity", {}) or {}
@@ -668,7 +671,8 @@ def _poller():
             snap = _poll_once()
         except Exception as exc:  # never kill the poller on a bad sample
             snap = {"ninfer_ok": False, "state": "offline", "error": str(exc),
-                    "as_of": time.time(), "ninfer_base_url": _current_base()}
+                    "as_of": time.time(), "ninfer_base_url": _current_base(),
+                    "last_ok": _last_ok}
         eff = snap.get("state") if snap.get("ninfer_ok") else "offline"
         if _prev_event_state is not None and eff != _prev_event_state:
             _events_append(snap.get("as_of", time.time()), _prev_event_state, eff, snap.get("error"))
@@ -722,7 +726,8 @@ class Handler(BaseHTTPRequestHandler):
                 minutes = int(parse_qs(urlparse(self.path).query).get("minutes", ["60"])[0])
             except ValueError:
                 minutes = 60
-            minutes = max(5, min(1440, minutes))
+            upper = max(5, HISTORY_RETENTION // 60)
+            minutes = max(5, min(upper, minutes))
             now = time.time()
             with _lock:
                 pts = [p for p in list(_series) if p[0] >= now - minutes * 60]
