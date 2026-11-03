@@ -107,6 +107,9 @@
   .monitor-cache-facts dd{margin:0;text-align:right}
   .warn{border:1px solid var(--st-danger);border-radius:12px;padding:12px;margin-bottom:16px;font-size:13px}
   .update-banner{border:1px solid var(--st-accent);border-radius:12px;padding:12px 16px;margin-bottom:16px;font-size:13px;background:var(--st-accent-tint)}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:100;display:none;align-items:flex-start;justify-content:center;padding:12vh 16px 16px}
+  .modal.open{display:flex}
+  .modal-card{background:var(--st-surface);border:1px solid var(--st-line);border-radius:16px;padding:20px;width:min(560px,100%);box-shadow:0 20px 60px rgba(0,0,0,.4)}
   .update-banner a{color:var(--st-accent-text);font-weight:600}
   @media(max-width:1100px){.monitor-metric{padding:16px}.monitor-metric__source{flex-basis:100%;margin:0}}
   @media(max-width:950px){.monitor-context-requests{grid-template-columns:1fr}}
@@ -123,6 +126,7 @@
       <div class="small muted" id="uptimeText"></div>
     </div>
     <div style="display:flex;gap:8px">
+      <button class="theme-btn" id="settingsBtn" type="button" data-i18n="settings">设置</button>
       <select class="theme-btn" id="langSel" aria-label="语言 / Language">
         <option value="zh-CN">中文</option>
         <option value="en">English</option>
@@ -134,20 +138,23 @@
   <div id="err" class="warn" style="display:none"></div>
   <div id="updateBanner" class="update-banner" style="display:none"></div>
 
-  <!-- 设置：NInfer 地址在界面里改，不用改 compose -->
-  <section class="st-card" aria-label="设置">
-    <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <h2 data-i18n="settings" style="margin-right:auto">设置</h2>
-      <span class="small muted"><span data-i18n="currentLabel">当前生效地址</span>：<span class="num" id="currentBase">—</span></span>
+  <!-- 设置：单独弹窗，不占主页面位置；NInfer 地址在弹窗里改，不用改 compose -->
+  <div id="settingsModal" class="modal" role="dialog" aria-modal="true" aria-label="设置">
+    <div class="modal-card">
+      <div style="display:flex;align-items:center;gap:12px">
+        <h2 data-i18n="settings" style="margin-right:auto">设置</h2>
+        <button class="theme-btn" id="settingsCloseBtn" type="button" aria-label="关闭">×</button>
+      </div>
+      <p class="small muted"><span data-i18n="currentLabel">当前生效地址</span>：<span class="num" id="currentBase">—</span></p>
+      <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+        <input id="baseUrlInput" type="url" placeholder="http://host.docker.internal:8080"
+          style="flex:1;min-width:260px;background:var(--st-surface-2);color:var(--st-ink);border:1px solid var(--st-line);border-radius:10px;padding:10px 12px;font-size:14px"/>
+        <button class="theme-btn" id="saveBaseBtn" type="button" data-i18n="save">保存</button>
+      </div>
+      <div class="small" id="settingsMsg" style="margin-top:10px"></div>
+      <p class="small muted" style="margin:10px 0 0" data-i18n="settingsHint">改这里不用改 compose、不用重启面板；保存后立即用新地址轮询，并写到数据卷里，刷新和重启都不会丢。没保存过时，用环境变量或默认地址。</p>
     </div>
-    <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
-      <input id="baseUrlInput" type="url" placeholder="http://host.docker.internal:8080"
-        style="flex:1;min-width:260px;background:var(--st-surface-2);color:var(--st-ink);border:1px solid var(--st-line);border-radius:10px;padding:10px 12px;font-size:14px"/>
-      <button class="theme-btn" id="saveBaseBtn" type="button" data-i18n="save">保存</button>
-      <span class="small" id="settingsMsg" style="align-self:center"></span>
-    </div>
-    <p class="small muted" style="margin:10px 0 0" data-i18n="settingsHint">改这里不用改 compose、不用重启面板；保存后立即用新地址轮询，并写到数据卷里，刷新和重启都不会丢。没保存过时，用环境变量或默认地址。</p>
-  </section>
+  </div>
 
   <!-- 模型状态卡 -->
   <section class="st-card monitor-state" aria-label="模型状态">
@@ -717,6 +724,12 @@ $('saveBaseBtn').addEventListener('click', async () => {
     msg.style.color = 'var(--st-danger-text)'; msg.textContent = T().invalidAddress;
   }
 });
+const _settingsModal = $('settingsModal');
+const _closeSettings = () => _settingsModal.classList.remove('open');
+$('settingsBtn').addEventListener('click', () => { _settingsModal.classList.add('open'); $('baseUrlInput').focus(); });
+$('settingsCloseBtn').addEventListener('click', _closeSettings);
+_settingsModal.addEventListener('click', e => { if(e.target === _settingsModal) _closeSettings(); });
+document.addEventListener('keydown', e => { if(e.key === 'Escape') _closeSettings(); });
 loadSettings(); fetchVersion();
 window.addEventListener('resize', drawHistory);
 tick(); setInterval(tick, 2000);

@@ -42,7 +42,7 @@ python3 app.py
 
 ## 设置：NInfer 地址在界面里改
 
-compose 里**不写死** NInfer 地址。面板顶部的“设置”卡里填地址（例如 `http://host.docker.internal:8080`，或同网容器名 `http://ninfer-unc:8080`），点保存立即生效，不用改 compose、不用重启面板。
+compose 里**不写死** NInfer 地址。点右上角“设置”按钮打开弹窗，在里面填地址（例如 `http://host.docker.internal:8080`，或同网容器名 `http://ninfer-unc:8080`），点保存立即生效，不用改 compose、不用重启面板；弹窗点遮罩、按 Esc 或点 × 都能关。
 
 优先级：**界面保存的地址 > `NINFER_BASE_URL` 环境变量 > 镜像默认地址**。保存的值写在数据卷的 `settings.json` 里，刷新、重启、重建容器都不会丢；不用数据卷时，文件只在容器层里，刷新和重启不丢、重建会丢。
 

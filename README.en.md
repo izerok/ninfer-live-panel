@@ -42,7 +42,7 @@ python3 app.py
 
 ## Settings: edit the NInfer address in the UI
 
-The compose file does **not** hardcode a NInfer address. Use the Settings card at the top of the panel (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart.
+The compose file does **not** hardcode a NInfer address. Click the Settings button in the top right to open a dialog and enter the address there (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart. Close the dialog with the × button, by clicking the backdrop, or with Esc.
 
 Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The saved value lives in `settings.json` in the data volume and survives refreshes, restarts, and recreates. Without the data volume, the file lives in the container layer: refresh- and restart-safe, but lost on recreate.
 
