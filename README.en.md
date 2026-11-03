@@ -17,7 +17,7 @@ The images below are the real panel UI (light theme, Chinese UI). The data is si
     <td align="center"><img src="docs/screenshots/settings.png" width="400"><br>Settings dialog</td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><img src="docs/screenshots/history.png" width="800"><br>History, multiple dimensions (15 minutes by default)</td>
+    <td colspan="2" align="center"><img src="docs/screenshots/history.png" width="800"><br>History, multiple dimensions + cumulative output (15 minutes by default)</td>
   </tr>
 </table>
 
@@ -45,10 +45,10 @@ python3 app.py
 | --- | --- |
 | Model state | Five states: idle / reading / generating / queued / error (NInfer has no single state field; mapped from running / waiting / prefilling / decode_ready). |
 | Metric cards | Decode, prefill, GPU load, VRAM, temperature, power, PCIe, CPU, disk read. Sparklines resume from backend history after refresh (PCIe has link info only, so its sparkline stays dashed; it can be hidden from Settings). |
-| Current requests | Top rows are in-flight slots: slot id, prompt length, cached portion (length · share of prompt), context window, share of window, "In flight". Grey rows below are requests observed ending in the past hour ("Ended HH:MM"); lengths only; slot ids are reused. Queued requests are a count only. |
+| Current requests | Top rows are in-flight slots: slot id, prompt length, cached portion (length · share of prompt), context window, share of window, "In flight". Grey rows below are requests observed ending in the past hour ("Ended HH:MM"); lengths only; slot ids are reused. Queued requests are a count only. The table body is capped at 320px and scrolls internally; the totals line stays outside the scroll area and always visible. |
 | Context usage | Longest in-flight prompt / window limit (`capacity.max_context` from `/v1/load`), plus KV cache, system memory, and GPU temperature rows. |
 | Conversation cache | Retained slot count and host KV, plus cumulative reused tokens. |
-| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select legend toggles (stored in the browser) showing latest values. Default range 15 minutes; switches to 1 hour / 24 hours (plus 7 days when retention reaches it); hover shows values at that moment; below are window average/peak stats and Export CSV. Sampled every 2 seconds and persisted to disk, so it survives refreshes, restarts, and recreates (with the data volume mounted); only the last 24 hours are kept (configurable). When the data span is shorter than the window, the axis fits the data so the curve always fills the chart, and time ticks adapt to the span. |
+| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select legend toggles (stored in the browser) showing latest values. Default range 15 minutes; switches to 1 hour / 24 hours (plus 7 days when retention reaches it); hover shows values at that moment; below are window average/peak stats and Export CSV. Sampled every 2 seconds and persisted to disk, so it survives refreshes, restarts, and recreates (with the data volume mounted); only the last 24 hours are kept (configurable). When the data span is shorter than the window, the axis fits the data so the curve always fills the chart, and time ticks adapt to the span. Below it, a cumulative-output curve (cumulative decode tokens over time, breaking — not cliffing — when an NInfer restart resets the counter) with a “Cumulative X · This window Y” line; KV and GPU percent dimensions draw lines only, no fill; Export CSV gains a cumulative decode count column. |
 | State events | State changes seen by backend polling (time, old → new, reason), capped at 200 entries in the data volume; the curve marks each moment with a vertical line (offline red, recovery green, other grey). |
 
 ## Settings
