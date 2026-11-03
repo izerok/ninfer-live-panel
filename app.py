@@ -118,6 +118,49 @@ def _history_append(now, decode, prefill, kv_pct, gpu_pct):
         pass  # history falls back to memory-only; never break polling
 
 
+# State-change events, derived only from the poller's own snapshots.
+# One entry per transition (time, from-state, to-state, error text if any).
+# No prompt or generated text, no new NInfer calls beyond normal polling.
+# Capped at 200 entries; a write failure never breaks polling, like history.
+EVENTS_FILE = os.environ.get(
+    "PANEL_EVENTS_FILE", str(Path(HISTORY_FILE).parent / "events.jsonl"))
+_events = _deque()  # (timestamp, from_state, to_state, error_or_None)
+_prev_event_state = None
+
+
+def _events_load():
+    """Load persisted events at startup; never fatal."""
+    try:
+        path = Path(EVENTS_FILE)
+        if not path.is_file():
+            return
+        for line in path.read_text().splitlines():
+            try:
+                e = json.loads(line)
+                _events.append((float(e["t"]), e.get("from"), e.get("to"), e.get("error")))
+            except (ValueError, KeyError, TypeError):
+                continue
+        while len(_events) > 200:
+            _events.popleft()
+    except Exception:
+        pass
+
+
+def _events_append(now, from_state, to_state, error):
+    """Append one transition to memory and to the file."""
+    _events.append((now, from_state, to_state, error))
+    while len(_events) > 200:
+        _events.popleft()
+    try:
+        path = Path(EVENTS_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as fh:
+            fh.write(json.dumps(
+                {"t": now, "from": from_state, "to": to_state, "error": error}) + "\n")
+    except Exception:
+        pass  # events fall back to memory-only; never break polling
+
+
 # GUI-editable NInfer address. Precedence: GUI-saved value (settings.json
 # in the data volume) > NINFER_BASE_URL env > built-in default. The compose
 # file no longer hardcodes an address: first run uses the env/default, and
@@ -208,13 +251,13 @@ _UPDATE_ENABLED = os.environ.get("PANEL_UPDATE_CHECK", "1") != "0"
 _update_cache = {"at": 0.0, "data": None}
 
 
-def _update_check():
+def _update_check(force=False):
     current = _panel_version()
     if not _UPDATE_ENABLED:
         return {"enabled": False, "current": current, "latest": None,
                 "update_available": False, "url": None}
     now = time.time()
-    if _update_cache["data"] is not None and now - _update_cache["at"] < 3600:
+    if not force and _update_cache["data"] is not None and now - _update_cache["at"] < 3600:
         return _update_cache["data"]
     result = {"enabled": True, "current": current, "latest": None,
               "update_available": False, "url": None, "checked_at": now}
@@ -244,6 +287,29 @@ def _get(path, timeout=3):
     req.add_header("Accept", "application/json, text/plain")
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.status, resp.read().decode("utf-8", "replace")
+
+
+def _test_connection(base):
+    """Reachability check for a user-supplied address, WITHOUT the API key:
+    _get() attaches the Bearer token, so it must never be pointed at an
+    address the operator has not saved yet. /health needs no auth, and a
+    200 there is all a 'can I reach it' test needs."""
+    try:
+        req = urllib.request.Request(
+            base + "/health", headers={"Accept": "application/json, text/plain"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            body = resp.read().decode("utf-8", "replace")
+            status = None
+            try:
+                status = json.loads(body).get("status") if body.strip().startswith("{") else None
+            except Exception:
+                pass
+            if resp.status != 200 or status not in (None, "ok"):
+                return {"ok": False, "http": resp.status, "status": status,
+                        "error": f"/health -> HTTP {resp.status} status={status}"}
+            return {"ok": True, "http": resp.status, "status": status}
+    except Exception as exc:
+        return {"ok": False, "http": None, "status": None, "error": str(exc)[:200]}
 
 
 def _num(obj, *keys, default=0):
@@ -596,12 +662,17 @@ def _poll_once():
 
 
 def _poller():
+    global _prev_event_state
     while True:
         try:
             snap = _poll_once()
         except Exception as exc:  # never kill the poller on a bad sample
             snap = {"ninfer_ok": False, "state": "offline", "error": str(exc),
                     "as_of": time.time(), "ninfer_base_url": _current_base()}
+        eff = snap.get("state") if snap.get("ninfer_ok") else "offline"
+        if _prev_event_state is not None and eff != _prev_event_state:
+            _events_append(snap.get("as_of", time.time()), _prev_event_state, eff, snap.get("error"))
+        _prev_event_state = eff
         with _lock:
             _snapshot.clear()
             _snapshot.update(snap)
@@ -682,8 +753,24 @@ class Handler(BaseHTTPRequestHandler):
                 {"version": _panel_version(),
                  "update_check_enabled": _UPDATE_ENABLED}), "application/json")
             return
-        if self.path == "/api/update-check":
-            self._send(200, json.dumps(_update_check()), "application/json")
+        if self.path.startswith("/api/update-check"):
+            from urllib.parse import urlparse, parse_qs
+            force = parse_qs(urlparse(self.path).query).get("force", ["0"])[0] == "1"
+            self._send(200, json.dumps(_update_check(force=force)), "application/json")
+            return
+        if self.path == "/api/events":
+            self._send(200, json.dumps({"events": [
+                {"t": t, "from": f, "to": to, "error": e}
+                for t, f, to, e in list(_events)]}), "application/json")
+            return
+        if self.path.startswith("/api/test-connection"):
+            from urllib.parse import urlparse, parse_qs
+            raw = parse_qs(urlparse(self.path).query).get("base_url", [""])[0]
+            url = _valid_base_url(raw)
+            if not url:
+                self._send(400, json.dumps({"error": "invalid base_url: expected http(s)://host[:port], no userinfo, no path"}), "application/json")
+                return
+            self._send(200, json.dumps(_test_connection(url)), "application/json")
             return
         if self.path == "/api/settings":
             with _lock:
@@ -711,6 +798,7 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     _history_load()
+    _events_load()
     _settings_load()
     threading.Thread(target=_poller, daemon=True).start()
     print(f"ninfer-live-panel: polling {_current_base()} every {POLL}s, listening on {BIND}:{PORT}",
