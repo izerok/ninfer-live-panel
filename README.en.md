@@ -35,7 +35,7 @@ python3 app.py
 | --- | --- |
 | Model state | Five states: idle / reading / generating / queued / error. NInfer has no single state field; this is the panel's documented mapping from running / waiting / prefilling / decode_ready, not a server field. |
 | 8 metric cards | Decode and prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a 60-second sparkline (page-local; it is lost on refresh — see History below). |
-| History | Decode and prefill speed curves, switchable between 15 minutes / 1 hour / 24 hours, with hover values. |
+| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours, refetches immediately on click, and the x-axis follows the selected window. Hover shows each selected dimension at that moment. Left axis is tok/s, right axis is % (when only % dimensions are selected, the left axis shows % too). |
 | Current requests | In-flight slots, one row each: slot id, prompt length, cached portion, context window, share of window. |
 | Context usage | Window limit (`capacity.max_context` from `/v1/load`), KV cache usage, system memory, GPU temperature. |
 | Conversation cache | Retained slot count and host KV, plus cumulative reused tokens. |
