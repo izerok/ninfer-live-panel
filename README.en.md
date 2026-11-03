@@ -51,14 +51,15 @@ python3 app.py
 | --- | --- |
 | Model state | Five states: idle / reading / generating / queued / error. NInfer has no single state field; this is the panel's documented mapping from running / waiting / prefilling / decode_ready, not a server field. |
 | 8 metric cards | Decode and prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a 60-second sparkline (page-local; it is lost on refresh — see History below). |
-| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours, refetches immediately on click, and the x-axis follows the selected window. Hover shows each selected dimension at that moment. Left axis is tok/s, right axis is % (when only % dimensions are selected, the left axis shows % too). |
+| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours, refetches immediately on click, and the x-axis follows the selected window. Hover shows each selected dimension at that moment. Left axis is tok/s, right axis is % (when only % dimensions are selected, the left axis shows % too). Below the curve are the current window's average/peak stats, and Export CSV saves the current window and dimensions as a CSV file. |
+| State events | A log of state changes seen by backend polling (time, old state → new state, reason), capped at 200 entries and stored in the data volume. States only — no prompt or generated content. |
 | Current requests | In-flight slots, one row each: slot id, prompt length, cached portion, context window, share of window. |
 | Context usage | Window limit (`capacity.max_context` from `/v1/load`), KV cache usage, system memory, GPU temperature. |
 | Conversation cache | Retained slot count and host KV, plus cumulative reused tokens. |
 
 ## Settings: edit the NInfer address in the UI
 
-The compose file does **not** hardcode a NInfer address. Click the Settings button in the top right to open a dialog and enter the address there (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart. Close the dialog with the × button, by clicking the backdrop, or with Esc.
+The compose file does **not** hardcode a NInfer address. Click the Settings button in the top right to open a dialog and enter the address there (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart. Close the dialog with the × button, by clicking the backdrop, or with Esc. The dialog also offers Test connection (checks `/health` only, sends no API key, never auto-saves), a page refresh interval (1–10 s, display only — backend sampling is unchanged), and Check for updates (bypasses the 1-hour cache for one manual check).
 
 Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The saved value lives in `settings.json` in the data volume and survives refreshes, restarts, and recreates. Without the data volume, the file lives in the container layer: refresh- and restart-safe, but lost on recreate.
 
