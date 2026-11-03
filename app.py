@@ -717,7 +717,7 @@ def _poll_once():
             "host_kv_bytes": int(_num(occ, "host_kv_bytes")),
             "host_kv_capacity_bytes": int(_num(cap, "host_kv_bytes")),
         },
-        "counters": {"decode_tokens": decode_tokens,
+        "counters": {"decode_tokens": (decode_tokens if ctr.get("committed_decode_tokens") is not None else None),
                      "prefill_tokens": prefill_tokens,
                      "reused_prompt_tokens": int(_num(ctr, "reused_prompt_tokens")),
                      "decode_rounds": int(_num(ctr, "decode_rounds"))},
