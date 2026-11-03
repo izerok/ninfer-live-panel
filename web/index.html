@@ -7,10 +7,11 @@
 <!--
   本页按 Niko1221/Strata apps/host 的 Monitor 屏 1:1 复刻版式（MIT 许可），
   数据源换成本地 NInfer。版式、卡片顺序、文案均照 Strata 的来：
-  模型状态卡（五态 badges + 模型进度条）→ 8 张指标卡（4 列）→
-  上下文占用 + 最近请求 → 对话缓存。
+  模型状态卡（五态 badges + 模型进度条）→ 9 张指标卡（4 列）→
+  上下文占用 + 当前请求（含过去 1 小时观测记录）→ 对话缓存。
   Strata 有而 NInfer 不提供的字段不造数：单请求进度（条形为进行中动画）、
-  历史请求（表为空态）、专家缓存（改用 KV 缓存）、PCIe 传输速率（只给链路）。
+  专家缓存（改用 KV 缓存）、PCIe 传输速率（只给链路）；历史请求一栏是
+  面板自己观测的过去 1 小时记录，不是 NInfer 原生历史。
   完整适配清单见 README。
 -->
 <style>
@@ -102,6 +103,7 @@
   .st-table th{font-size:10px;font-weight:500;letter-spacing:.03em;white-space:nowrap;padding:10px 8px;text-align:left;color:var(--st-ink-muted);border-bottom:1px solid var(--st-line)}
   .st-table td{padding:12px 8px;white-space:nowrap;border-bottom:1px solid var(--st-line)}
   .st-table .num{text-align:right}
+  .st-table tr.req-past{color:var(--st-ink-muted)}
   .monitor-cache{display:flex;flex-direction:column;gap:16px}
   .monitor-cache-bars{display:grid;grid-template-columns:1fr 1fr;gap:24px}
   .monitor-cache-facts{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px;margin:0}
@@ -198,15 +200,17 @@
     </div>
   </section>
 
-  <!-- 8 张指标卡，顺序与 Strata 一致 -->
+  <!-- 9 张指标卡，顺序与 Strata 一致（速度卡已拆成解码 / 预填充两张） -->
   <div class="monitor-metrics">
-    <section class="st-card monitor-metric" data-i18n-aria="speed">
-      <div class="st-metric__label"><span data-i18n="speed"></span><span class="monitor-metric__source" id="speedSource">—</span></div>
-      <div class="monitor-speed-values">
-        <div><div class="st-metric__value"><span id="decode">—</span><span class="st-metric__unit"> tok/s</span></div><div class="monitor-metric__sub" id="decodeSub">—</div></div>
-        <div><div class="st-metric__value"><span id="prefill">—</span><span class="st-metric__unit"> tok/s</span></div><div class="monitor-metric__sub" id="prefillSub">—</div></div>
-      </div>
-      <div class="monitor-spark" id="speedSpark"></div>
+    <section class="st-card monitor-metric" data-i18n-aria="decodeSpeed">
+      <div class="st-metric__label"><span data-i18n="decodeSpeed"></span><span class="monitor-metric__source" id="decodeSource">—</span></div>
+      <div><div class="st-metric__value"><span id="decode">—</span><span class="st-metric__unit"> tok/s</span></div><div class="monitor-metric__sub" id="decodeSub">—</div></div>
+      <div class="monitor-spark" id="decodeSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" data-i18n-aria="prefillSpeed">
+      <div class="st-metric__label"><span data-i18n="prefillSpeed"></span><span class="monitor-metric__source" id="prefillSource">—</span></div>
+      <div><div class="st-metric__value"><span id="prefill">—</span><span class="st-metric__unit"> tok/s</span></div><div class="monitor-metric__sub" id="prefillSub">—</div></div>
+      <div class="monitor-spark" id="prefillSpark"></div>
     </section>
     <section class="st-card monitor-metric" data-i18n-aria="gpuLoad">
       <div class="st-metric__label"><span data-i18n="gpuLoad"></span><span class="monitor-metric__source" id="gpuLoadSource">—</span></div>
@@ -267,10 +271,11 @@
     <section class="st-card monitor-requests">
       <h2 data-i18n="currentReq"></h2>
       <div class="monitor-request-table">
-        <table class="st-table"><thead><tr><th data-i18n="slot"></th><th class="num" data-i18n="prompt"></th><th class="num" data-i18n="cached"></th><th class="num" data-i18n="ctxWindow"></th><th class="num" data-i18n="shareWindow"></th></tr></thead>
-        <tbody id="currentReqBody"><tr><td colspan="5" class="muted">—</td></tr></tbody></table>
+        <table class="st-table"><thead><tr><th data-i18n="slot"></th><th class="num" data-i18n="prompt"></th><th class="num" data-i18n="cached"></th><th class="num" data-i18n="ctxWindow"></th><th class="num" data-i18n="shareWindow"></th><th data-i18n="reqStatus"></th></tr></thead>
+        <tbody id="currentReqBody"><tr><td colspan="6" class="muted">—</td></tr></tbody></table>
       </div>
       <p class="small muted" style="margin:auto 0 0;padding-top:10px" id="requestTotals" data-i18n="currentNote"></p>
+      <p class="small muted" style="margin:0" data-i18n="reqHistoryNote"></p>
     </section>
   </div>
 
@@ -581,13 +586,13 @@ const H = {decode:[],prefill:[],gpu:[],vram:[],temp:[],power:[],cpu:[],disk:[]};
 function push(k,v){ H[k].push(v??null); if(H[k].length>30) H[k].shift(); }
 // Strata ReferenceSpark：100×32，面积 12% + 1.6px 线，空数据画虚线基线
 function spark(values, color, secondary){
-  const all=[...values, ...(secondary||[])].filter(v=>v!==null);
+  const all=[...values, ...(secondary||[])].filter(v=>v!==null && v!==undefined);
   if(!all.length) return '<svg viewBox="0 0 100 32" preserveAspectRatio="none"><path d="M0,28 L100,28" fill="none" stroke="currentColor" opacity=".35" stroke-dasharray="3 3" stroke-width="1"/></svg>';
   const max=Math.max(...all,1);
   const path=(vals)=>{
     let p='', started=false;
     vals.forEach((v,i)=>{
-      if(v===null){ started=false; return; }
+      if(v===null || v===undefined){ started=false; return; }
       const x=(i/(vals.length-1||1))*100, y=30-(v/max)*26;
       p+=(started?'L':'M')+x.toFixed(2)+' '+y.toFixed(2)+' '; started=true;
     });
@@ -609,6 +614,48 @@ function ninferToStrata(s){
   if(s.state==='generating') return 'generating';
   if(s.state==='queued') return 'queued';
   return 'idle';
+}
+// 当前请求表（含过去 1 小时观测记录）：当前行来自快照（2 秒刷新），
+// 过去行来自 /api/request-history（10 秒节流，与事件同口径）。过去行置灰，
+// 状态只用可观测的两种：进行中 / 已结束（结束原因 NInfer 未报告，不写已完成）。
+let _lastSnap = null, _pastReqs = [], _pastEndedCount = null, _lastMaxCtx = 0;
+function _reqRowHtml(d, past){
+  const share = _lastMaxCtx ? (d.prompt_tokens / _lastMaxCtx * 100) : null;
+  const status = past ? T().reqEnded.replace('{t}', new Date(d.last * 1000).toLocaleTimeString()) : T().reqActive;
+  return '<tr' + (past ? ' class="req-past"' : '') + '><td>#' + d.id + '</td><td class="num" title="' + d.prompt_tokens.toLocaleString() + '">' + fmtTok(d.prompt_tokens) +
+    '</td><td class="num" title="' + d.cached_tokens.toLocaleString() + '">' + fmtTok(d.cached_tokens) +
+    '</td><td class="num" title="' + (d.n_ctx ? d.n_ctx.toLocaleString() : '') + '">' + (d.n_ctx ? fmtTok(d.n_ctx) : '—') +
+    '</td><td class="num">' + (share !== null ? share.toFixed(1) + '%' : '—') + '</td><td>' + status + '</td></tr>';
+}
+function renderReqTable(s){
+  if(s.context && s.context.max_context) _lastMaxCtx = s.context.max_context;
+  const slots = s.slots || {};
+  const det = slots.processing_details || [];
+  const r = s.requests || {};
+  const past = _pastReqs.map(p => ({id: p.slot, prompt_tokens: p.prompt, cached_tokens: p.cached, n_ctx: p.n_ctx, last: p.last}));
+  const body = $('currentReqBody');
+  if(!s.ninfer_ok){
+    body.innerHTML = '<tr><td colspan="6" class="muted">' + T().curOffline + '</td></tr>' +
+      past.map(d => _reqRowHtml(d, true)).join('');
+  } else if(!det.length && !past.length){
+    body.innerHTML = '<tr><td colspan="6" class="muted">' + T().curNone +
+      ((r.waiting || 0) > 0 ? T().curQueued.replace('{n}', r.waiting) : '') + '</td></tr>';
+  } else {
+    body.innerHTML = det.map(d => _reqRowHtml(d, false)).join('') + past.map(d => _reqRowHtml(d, true)).join('');
+  }
+}
+let _lastReqHistFetch = 0;
+async function fetchReqHistory(){
+  const now = Date.now();
+  if(now - _lastReqHistFetch < 10000 && _pastReqs.length) return;
+  _lastReqHistFetch = now;
+  try{
+    const j = await (await fetch('/api/request-history')).json();
+    const all = j.requests || [];
+    _pastReqs = all.filter(x => x.status === 'ended').sort((a, b) => b.last - a.last);
+    _pastEndedCount = _pastReqs.length;
+    if(_lastSnap) renderReqTable(_lastSnap);
+  }catch(e){ /* past requests missing never breaks the main panel */ }
 }
 let _prevOnline = null;
 async function tick(){
@@ -640,14 +687,16 @@ async function tick(){
   const bar=$('progressBar');
   if(phase==='reading'||phase==='generating'){ bar.className='indet'+(phase==='reading'?' info':''); bar.style.width='40%'; $('progressNote').textContent=T().noProgress; }
   else { bar.className=''; bar.style.width='0%'; $('progressNote').textContent=''; }
-  // 速度卡
+  // 解码 / 预填充卡（0.1.4 起拆成两张，各画一条单线迷你曲线）
   $('decode').textContent=fmtRateNum(inst.decode_tok_s);
   $('prefill').textContent=fmtRateNum(inst.prefill_tok_s);
   $('decodeSub').textContent = phase==='generating' ? T().decodeSubDecoding : T().decodeSubLast;
   $('prefillSub').textContent = phase==='reading' ? T().prefillSubReading : (phase==='generating' ? T().prefillSubGenerating : T().prefillSubLast);
-  $('speedSource').textContent = s.ninfer_ok ? T().measured : T().unavailable;
+  $('decodeSource').textContent = s.ninfer_ok ? T().measured : T().unavailable;
+  $('prefillSource').textContent = s.ninfer_ok ? T().measured : T().unavailable;
   push('decode', inst.decode_tok_s); push('prefill', inst.prefill_tok_s);
-  $('speedSpark').innerHTML = spark(H.decode, '#10b981', H.prefill);
+  $('decodeSpark').innerHTML = spark(H.decode, '#10b981');
+  $('prefillSpark').innerHTML = spark(H.prefill, '#38bdf8');
   // GPU 卡
   const g=(s.gpu&&s.gpu.available)?s.gpu.cards[0]:null;
   $('gpuLoad').textContent=g?fmt(g.util_percent,1):'—';
@@ -701,26 +750,11 @@ async function tick(){
   $('ramBar').style.width=hm.available&&has(hm.used_percent)?Math.min(100,hm.used_percent)+'%':'0%';
   $('tempBarText').textContent=g?fmt(g.temp_c,0)+' °C':'—';
   $('tempBar').style.width=g&&has(g.temp_c)?Math.min(100,g.temp_c/90*100)+'%':'0%';
-  // 当前请求：后端 /slots 的 processing_details 本来就有，前端之前没画出来，
-  // 只留了一张“暂无请求记录”的静态空表——这就是看不到当前请求的 bug。
+  // 当前请求表（含过去 1 小时观测记录）由 renderReqTable 画：当前行来自
+  // 快照，过去行来自 /api/request-history。slots 仍留给对话缓存与合计行用。
   const slots=s.slots||{};
-  const det = slots.processing_details || [];
-  const maxCtx = ctx.max_context || 0;
-  const body = $('currentReqBody');
-  if(!s.ninfer_ok){
-    body.innerHTML = '<tr><td colspan="5" class="muted">'+T().curOffline+'</td></tr>';
-  } else if(!det.length){
-    body.innerHTML = '<tr><td colspan="5" class="muted">'+T().curNone +
-      ((r.waiting||0) > 0 ? T().curQueued.replace('{n}', r.waiting) : '') + '</td></tr>';
-  } else {
-    body.innerHTML = det.map(d => {
-      const share = maxCtx ? (d.prompt_tokens / maxCtx * 100) : null;
-      return '<tr><td>#' + d.id + '</td><td class="num" title="' + d.prompt_tokens.toLocaleString() + '">' + fmtTok(d.prompt_tokens) +
-        '</td><td class="num" title="' + d.cached_tokens.toLocaleString() + '">' + fmtTok(d.cached_tokens) +
-        '</td><td class="num" title="' + (d.n_ctx ? d.n_ctx.toLocaleString() : '') + '">' + (d.n_ctx ? fmtTok(d.n_ctx) : '—') +
-        '</td><td class="num">' + (share !== null ? share.toFixed(1) + '%' : '—') + '</td></tr>';
-    }).join('');
-  }
+  _lastSnap = s;
+  renderReqTable(s);
   // 对话缓存
   $('parkedText').textContent=(slots.retained??'—')+' / '+(slots.total??'—');
   $('parkedBar').style.width=(slots.total)?(slots.retained/slots.total*100)+'%':'0%';
@@ -730,7 +764,7 @@ async function tick(){
   $('lastCacheText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?(T().lastCacheReuse.replace('{x}', fmtTok(s.counters.reused_prompt_tokens))):T().reuseNotReported;
   $('reusedTotalText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?fmtTok(s.counters.reused_prompt_tokens):'—';
   if(m.requests_total!==undefined && m.requests_total!==null){
-    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateNum(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0));
+    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateNum(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0)) + (_pastEndedCount !== null ? T().reqPastEnded.replace('{n}', _pastEndedCount) : '');
   }
   fetchHistory().then(drawHistory);
   if(_prevOnline === true && !s.ninfer_ok){
@@ -844,7 +878,7 @@ let pollMs = (() => {
 let pollTimer = null;
 function restartPoll(){
   if(pollTimer) clearInterval(pollTimer);
-  pollTimer = setInterval(() => { tick(); fetchEvents(); }, pollMs);
+  pollTimer = setInterval(() => { tick(); fetchEvents(); fetchReqHistory(); }, pollMs);
 }
 $('pollIntervalInput').value = pollMs / 1000;
 $('pollIntervalInput').addEventListener('change', () => {
@@ -905,10 +939,9 @@ async function fetchEvents(){
 }
 // Spark seeding: on load, seed the page-local spark buffers from the
 // persisted backend history (last 30 points of a 5-minute window), then
-// live ticks keep appending. A refresh therefore no longer wipes the
-// decode / prefill / GPU-load sparklines. The other five cards have no
-// backend series (history stores decode, prefill, KV and GPU only), so
-// their sparklines stay page-local.
+// live ticks keep appending. A refresh therefore no longer wipes any
+// card sparkline. PCIe has no numeric series (link info only), so its
+// sparkline stays a dashed baseline.
 async function seedSparks(){
   try{
     const j = await (await fetch('/api/history?minutes=5')).json();
@@ -917,10 +950,15 @@ async function seedSparks(){
       H.decode = s.map(p => p.decode);
       H.prefill = s.map(p => p.prefill);
       H.gpu = s.map(p => p.gpu);
+      H.vram = s.map(p => p.vram);
+      H.temp = s.map(p => p.temp);
+      H.power = s.map(p => p.power);
+      H.cpu = s.map(p => p.cpu);
+      H.disk = s.map(p => p.disk);
     }
   }catch(e){ /* seeding is best-effort; live ticks fill the sparklines anyway */ }
 }
-seedSparks().finally(() => { tick(); fetchEvents(); restartPoll(); });
+seedSparks().finally(() => { tick(); fetchEvents(); fetchReqHistory(); restartPoll(); });
 </script>
 </body>
 </html>
