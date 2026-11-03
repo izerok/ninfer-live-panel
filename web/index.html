@@ -120,6 +120,7 @@
       <h1 data-i18n="title">监控</h1>
       <div class="title-detail" id="titleDetail">未加载模型</div>
       <div class="small muted" id="versionText"></div>
+      <div class="small muted" id="uptimeText"></div>
     </div>
     <div style="display:flex;gap:8px">
       <select class="theme-btn" id="langSel" aria-label="语言 / Language">
@@ -175,8 +176,8 @@
     <section class="st-card monitor-metric" aria-label="速度">
       <div class="st-metric__label"><span data-i18n="speed">速度</span><span class="monitor-metric__source" id="speedSource">不可用</span></div>
       <div class="monitor-speed-values">
-        <div><div class="st-metric__value"><span id="decode">—</span><span class="st-metric__unit"> t/s</span></div><div class="monitor-metric__sub" id="decodeSub">解码</div></div>
-        <div><div class="st-metric__value"><span id="prefill">—</span><span class="st-metric__unit"> t/s</span></div><div class="monitor-metric__sub" id="prefillSub">预填充</div></div>
+        <div><div class="st-metric__value"><span id="decode">—</span><span class="st-metric__unit"> tok/s</span></div><div class="monitor-metric__sub" id="decodeSub">解码</div></div>
+        <div><div class="st-metric__value"><span id="prefill">—</span><span class="st-metric__unit"> tok/s</span></div><div class="monitor-metric__sub" id="prefillSub">预填充</div></div>
       </div>
       <div class="monitor-spark" id="speedSpark"></div>
     </section>
@@ -323,9 +324,9 @@ const I18N = {
     detailQueued:'排队 {n} 个', detailLongest:' · 最长 prompt {x} tokens',
     diskWrite:'写入 {x} MB/s', gaugeLongest:'最长 prompt {a} / {b}',
     curQueued:' · 排队 {n} 个（排队请求无逐条明细）',
-    lastCacheReuse:'累计复用 {x} tokens', lastReq:'上次请求', reusedSince:'自启动以来复用',
-    versionLabel:'版本', updateCheckOff:' · 已关闭升级检查', updateAvailable:'有新版本可用：{v}', viewRelease:'查看 Release',
-    requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} tokens · 当前处理中 {cur} 个 · 排队 {q} 个'
+    lastCacheReuse:'累计复用 {x}', lastReq:'上次请求', reusedSince:'自启动以来复用',
+    versionLabel:'版本', uptimeLabel:'运行', diskWriteGb:'写入 {x} GB/s', updateCheckOff:' · 已关闭升级检查', updateAvailable:'有新版本可用：{v}', viewRelease:'查看 Release',
+    requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} · 当前处理中 {cur} 个 · 排队 {q} 个'
   },
   'en': {
     title:'Monitor', modelState:'Model state', modelProgress:'Model progress',
@@ -363,9 +364,9 @@ const I18N = {
     detailQueued:'Queued {n}', detailLongest:' · longest prompt {x} tokens',
     diskWrite:'Write {x} MB/s', gaugeLongest:'Longest prompt {a} / {b}',
     curQueued:' · queued {n} (no per-request detail for queued requests)',
-    lastCacheReuse:'Cumulative reuse {x} tokens', lastReq:'Last request', reusedSince:'Reused since startup',
-    versionLabel:'Version', updateCheckOff:' · update check off', updateAvailable:'A new version is available: {v}', viewRelease:'View release',
-    requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} tokens · in flight {cur} · queued {q}'
+    lastCacheReuse:'Cumulative reuse {x}', lastReq:'Last request', reusedSince:'Reused since startup',
+    versionLabel:'Version', uptimeLabel:'Uptime', diskWriteGb:'Write {x} GB/s', updateCheckOff:' · update check off', updateAvailable:'A new version is available: {v}', viewRelease:'View release',
+    requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} · in flight {cur} · queued {q}'
   }
 };
 let LANG = localStorage.getItem('ninfer-panel-lang') ||
@@ -475,14 +476,48 @@ function drawHistory(){
       tip.style.left = Math.min(w - 190, x + 12) + 'px';
       tip.style.top = '8px';
       tip.textContent = new Date(best.t * 1000).toLocaleTimeString() + ' · 解码 ' +
-        (best.decode !== null ? best.decode.toFixed(1) : '—') + ' tok/s · 预填充 ' +
-        (best.prefill !== null ? best.prefill.toFixed(1) : '—') + ' tok/s';
+        fmtRateNum(best.decode) + ' tok/s · 预填充 ' +
+        fmtRateNum(best.prefill) + ' tok/s';
     }
   };
   cv.onmouseleave = () => { tip.style.display = 'none'; };
 }
 const has = v => v!==null && v!==undefined && isFinite(v);
 const fmt = (v, d=1) => has(v) ? Number(v).toFixed(d) : '—';
+// Display-only unit rules (demo-approved 2026-11-03; snapshot raw numbers unchanged):
+// - token counts: >=1000 shorten to K/M, exact value kept in title="..." on table cells
+// - rates: >=1000 tok/s shorten to k tok/s, unit always written out as tok/s (never t/s)
+// - bytes: auto-scale B/KB/MB/GB; percents: always 1 decimal; durations: h/m/s, no bare seconds
+const fmtTok = v => {
+  if(!has(v)) return '—';
+  const n = Number(v);
+  if(n < 1000) return Math.round(n).toLocaleString();
+  if(n < 1e6){ const k = n / 1000; return (Number.isInteger(k) ? k : k.toFixed(1)) + 'K'; }
+  const m = n / 1e6; return (Number.isInteger(m) ? m : m.toFixed(2)) + 'M';
+};
+const fmtRateNum = v => {
+  if(!has(v)) return '—';
+  const n = Number(v);
+  return n >= 1000 ? (n / 1000).toFixed(2) + 'k' : n.toFixed(1);
+};
+const fmtBytes = b => {
+  if(!has(b)) return '—';
+  const n = Number(b);
+  if(n >= 1073741824) return (n / 1073741824).toFixed(2) + ' GB';
+  if(n >= 1048576){ const m = n / 1048576; return (Number.isInteger(m) ? m : m.toFixed(1)) + ' MB'; }
+  if(n >= 1024){ const k = n / 1024; return (Number.isInteger(k) ? k : k.toFixed(1)) + ' KB'; }
+  return Math.round(n) + ' B';
+};
+const fmtPct1 = v => has(v) ? Number(v).toFixed(1) + '%' : '—';
+const fmtDuration = sec => {
+  if(!has(sec)) return '—';
+  const t = Math.floor(Number(sec));
+  const d = Math.floor(t / 86400), h = Math.floor(t % 86400 / 3600), m = Math.floor(t % 3600 / 60);
+  if(d > 0) return d + 'd ' + h + 'h';
+  if(h > 0) return h + 'h ' + String(m).padStart(2, '0') + 'm';
+  if(m > 0) return m + 'm';
+  return t + 's';
+};
 const H = {decode:[],prefill:[],gpu:[],vram:[],temp:[],power:[],cpu:[],disk:[]};
 function push(k,v){ H[k].push(v??null); if(H[k].length>30) H[k].shift(); }
 // Strata ReferenceSpark：100×32，面积 12% + 1.6px 线，空数据画虚线基线
@@ -527,6 +562,7 @@ async function tick(){
     else if(b.dataset.phase==='queued') b.textContent=T().badgeQueued;
   });
   $('titleDetail').textContent = s.model || T().noModel;
+  $('uptimeText').textContent = has(s.uptime_seconds) ? (T().uptimeLabel + ' ' + fmtDuration(s.uptime_seconds)) : '';
   $('currentBase').textContent = s.ninfer_base_url || '—';
   const err=$('err');
   if(!s.ninfer_ok){ err.style.display='block'; err.textContent=T().errPrefix+(s.error||T().unknown)+T().errSuffix; }
@@ -534,8 +570,8 @@ async function tick(){
   const r=s.requests||{}, inst=s.instant||{}, m=s.metrics||{}, ctx=s.context||{};
   let phaseText, detail='';
   if(phase==='idle'){ phaseText=T().phaseIdle; }
-  else if(phase==='reading'){ phaseText=T().phaseReading; detail=T().detailPrefilling.replace('{n}', r.prefilling); if(ctx.max_processing_prompt_tokens) detail+=T().detailLongest.replace('{x}', ctx.max_processing_prompt_tokens.toLocaleString()); }
-  else if(phase==='generating'){ phaseText=T().phaseGenerating; detail=T().detailGenerating.replace('{d}', fmt(inst.decode_tok_s)).replace('{n}', r.running); }
+  else if(phase==='reading'){ phaseText=T().phaseReading; detail=T().detailPrefilling.replace('{n}', r.prefilling); if(ctx.max_processing_prompt_tokens) detail+=T().detailLongest.replace('{x}', fmtTok(ctx.max_processing_prompt_tokens)); }
+  else if(phase==='generating'){ phaseText=T().phaseGenerating; detail=T().detailGenerating.replace('{d}', fmtRateNum(inst.decode_tok_s)).replace('{n}', r.running); }
   else if(phase==='queued'){ phaseText=T().phaseQueued; detail=T().detailQueued.replace('{n}', r.waiting); }
   else { phaseText=T().phaseError; detail=s.error||''; }
   $('phaseText').textContent=phaseText; $('statusDetail').textContent=detail;
@@ -543,8 +579,8 @@ async function tick(){
   if(phase==='reading'||phase==='generating'){ bar.className='indet'+(phase==='reading'?' info':''); bar.style.width='40%'; $('progressNote').textContent=T().noProgress; }
   else { bar.className=''; bar.style.width='0%'; $('progressNote').textContent=''; }
   // 速度卡
-  $('decode').textContent=fmt(inst.decode_tok_s);
-  $('prefill').textContent=fmt(inst.prefill_tok_s);
+  $('decode').textContent=fmtRateNum(inst.decode_tok_s);
+  $('prefill').textContent=fmtRateNum(inst.prefill_tok_s);
   $('decodeSub').textContent = phase==='generating' ? T().decodeSubDecoding : T().decodeSubLast;
   $('prefillSub').textContent = phase==='reading' ? T().prefillSubReading : (phase==='generating' ? T().prefillSubGenerating : T().prefillSubLast);
   $('speedSource').textContent = s.ninfer_ok ? T().measured : T().unavailable;
@@ -552,11 +588,11 @@ async function tick(){
   $('speedSpark').innerHTML = spark(H.decode, '#10b981', H.prefill);
   // GPU 卡
   const g=(s.gpu&&s.gpu.available)?s.gpu.cards[0]:null;
-  $('gpuLoad').textContent=g?fmt(g.util_percent,0):'—';
+  $('gpuLoad').textContent=g?fmt(g.util_percent,1):'—';
   $('gpuLoadSub').textContent=g?g.name:T().unavailable;
   $('gpuLoadSource').textContent=g?T().measured:T().unavailable;
-  $('vram').textContent=g?fmt(g.mem_used_mb/1024,1):'—';
-  $('vramUnit').textContent=g?(' / '+fmt(g.mem_total_mb/1024,0)+' GB'):' GB';
+  $('vram').textContent=g?fmtBytes(g.mem_used_mb*1048576):'—';
+  $('vramUnit').textContent=g?(' / '+fmtBytes(g.mem_total_mb*1048576)):'';
   $('vramSub').textContent=g?g.name:T().unavailable;
   $('vramSource').textContent=g?T().measured:T().unavailable;
   $('temp').textContent=g?fmt(g.temp_c,0):'—';
@@ -577,7 +613,7 @@ async function tick(){
   $('pcieSpark').innerHTML=spark([null],'#38bdf8');
   // CPU 卡
   const cpu=s.host_cpu||{};
-  $('cpu').textContent=(cpu.available&&has(cpu.util_percent))?fmt(cpu.util_percent,0):'—';
+  $('cpu').textContent=(cpu.available&&has(cpu.util_percent))?fmt(cpu.util_percent,1):'—';
   $('cpuSub').textContent=cpu.available?(cpu.model?cpu.model+ (cpu.cores?' · '+cpu.cores+' 核':''):T().hostCpu):T().unavailable+'：'+(cpu.reason||T().unknown);
   $('cpuSource').textContent=cpu.available?T().measured:T().unavailable;
   push('cpu', cpu.available?cpu.util_percent:null);
@@ -585,21 +621,21 @@ async function tick(){
   // 磁盘读取卡
   const disk=s.host_disk||{};
   const readMbs=disk.available?disk.read_mbs:null, writeMbs=disk.available?disk.write_mbs:null;
-  $('disk').textContent=has(readMbs)?(readMbs>=1024?fmt(readMbs/1024,1):fmt(readMbs,1)):'—';
+  $('disk').textContent=has(readMbs)?(readMbs>=1024?fmt(readMbs/1024,2):fmt(readMbs,1)):'—';
   $('diskUnit').textContent=has(readMbs)?(readMbs>=1024?'GB/s':'MB/s'):'';
-  $('diskSub').textContent=has(writeMbs)?(T().diskWrite.replace('{x}', fmt(writeMbs,1))):(disk.available?T().diskReadSub:T().unavailable+'：'+(disk.reason||T().unknown));
+  $('diskSub').textContent=has(writeMbs)?((writeMbs>=1024?T().diskWriteGb.replace('{x}', fmt(writeMbs/1024,2)):T().diskWrite.replace('{x}', fmt(writeMbs,1)))):(disk.available?T().diskReadSub:T().unavailable+'：'+(disk.reason||T().unknown));
   $('diskSource').textContent=disk.available?T().measured:T().unavailable;
   push('disk', readMbs);
   $('diskSpark').innerHTML=spark(H.disk,'#38bdf8');
   // 上下文占用表
   const pct = ctx.max_prompt_share_percent;
-  $('gaugePct').textContent=has(pct)?Math.round(pct)+'%':'—';
-  $('gaugeSub').textContent=ctx.max_processing_prompt_tokens?(T().gaugeLongest.replace('{a}', ctx.max_processing_prompt_tokens.toLocaleString()).replace('{b}', ctx.max_context.toLocaleString())):T().gaugeNoReq;
+  $('gaugePct').textContent=fmtPct1(pct);
+  $('gaugeSub').textContent=ctx.max_processing_prompt_tokens?(T().gaugeLongest.replace('{a}', fmtTok(ctx.max_processing_prompt_tokens)).replace('{b}', fmtTok(ctx.max_context))):T().gaugeNoReq;
   $('gaugeArc').setAttribute('stroke-dasharray', (has(pct)?(235.6*pct/100).toFixed(1):0)+' 314.2');
-  $('kvBarText').textContent=has(ctx.kv_used_percent)?(ctx.kv_tokens.toLocaleString()+' / '+ctx.kv_capacity_tokens.toLocaleString()+' tokens'):'—';
+  $('kvBarText').textContent=has(ctx.kv_used_percent)?(fmtTok(ctx.kv_tokens)+' / '+fmtTok(ctx.kv_capacity_tokens)):'—';
   $('kvBar').style.width=has(ctx.kv_used_percent)?Math.min(100,ctx.kv_used_percent)+'%':'0%';
   const hm=s.host_memory||{};
-  $('ramBarText').textContent=hm.available?((hm.used_mb/1024).toFixed(1)+' / '+(hm.total_mb/1024).toFixed(1)+' GB'):'—';
+  $('ramBarText').textContent=hm.available?(fmtBytes(hm.used_mb*1048576)+' / '+fmtBytes(hm.total_mb*1048576)):'—';
   $('ramBar').style.width=hm.available&&has(hm.used_percent)?Math.min(100,hm.used_percent)+'%':'0%';
   $('tempBarText').textContent=g?fmt(g.temp_c,0)+' °C':'—';
   $('tempBar').style.width=g&&has(g.temp_c)?Math.min(100,g.temp_c/90*100)+'%':'0%';
@@ -617,9 +653,9 @@ async function tick(){
   } else {
     body.innerHTML = det.map(d => {
       const share = maxCtx ? (d.prompt_tokens / maxCtx * 100) : null;
-      return '<tr><td>#' + d.id + '</td><td class="num">' + d.prompt_tokens.toLocaleString() +
-        '</td><td class="num">' + d.cached_tokens.toLocaleString() +
-        '</td><td class="num">' + (d.n_ctx ? d.n_ctx.toLocaleString() : '—') +
+      return '<tr><td>#' + d.id + '</td><td class="num" title="' + d.prompt_tokens.toLocaleString() + '">' + fmtTok(d.prompt_tokens) +
+        '</td><td class="num" title="' + d.cached_tokens.toLocaleString() + '">' + fmtTok(d.cached_tokens) +
+        '</td><td class="num" title="' + (d.n_ctx ? d.n_ctx.toLocaleString() : '') + '">' + (d.n_ctx ? fmtTok(d.n_ctx) : '—') +
         '</td><td class="num">' + (share !== null ? share.toFixed(1) + '%' : '—') + '</td></tr>';
     }).join('');
   }
@@ -627,12 +663,12 @@ async function tick(){
   $('parkedText').textContent=(slots.retained??'—')+' / '+(slots.total??'—');
   $('parkedBar').style.width=(slots.total)?(slots.retained/slots.total*100)+'%':'0%';
   const hkv=ctx.host_kv_bytes, hkvCap=ctx.host_kv_capacity_bytes;
-  $('cacheMemText').textContent=(hkv&&hkvCap)?((hkv/1073741824).toFixed(2)+' / '+(hkvCap/1073741824).toFixed(2)+' GB'):'—';
+  $('cacheMemText').textContent=(hkv&&hkvCap)?(fmtBytes(hkv)+' / '+fmtBytes(hkvCap)):'—';
   $('cacheMemBar').style.width=(hkv&&hkvCap)?Math.min(100,hkv/hkvCap*100)+'%':'0%';
-  $('lastCacheText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?(T().lastCacheReuse.replace('{x}', s.counters.reused_prompt_tokens.toLocaleString())):T().reuseNotReported;
-  $('reusedTotalText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?s.counters.reused_prompt_tokens.toLocaleString()+' tokens':'—';
+  $('lastCacheText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?(T().lastCacheReuse.replace('{x}', fmtTok(s.counters.reused_prompt_tokens))):T().reuseNotReported;
+  $('reusedTotalText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?fmtTok(s.counters.reused_prompt_tokens):'—';
   if(m.requests_total!==undefined && m.requests_total!==null){
-    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmt(m.avg_decode_tok_s)).replace('{p}', fmt(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens??'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0));
+    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateNum(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0));
   }
   fetchHistory().then(drawHistory);
 }

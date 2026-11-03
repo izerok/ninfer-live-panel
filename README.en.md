@@ -87,6 +87,13 @@ Fields that exist in Strata but not in NInfer are never fabricated:
 - **Generated token counts**: `/slots` has none, so the current-requests table shows prompt length only, not output tokens.
 - **Unreachable fields**: shown as “unavailable”, never as 0 (0 would be misread as a measured value).
 
+## Number display rules (display only, values unchanged)
+
+- Speed is always written `tok/s`, never abbreviated to `t/s`; at or above 1000 tok/s it shortens to `k tok/s` (for example 1.23k tok/s).
+- Token counts at or above 1000 shorten to K/M (for example 12.0K, 262K, 180K / 524K); the exact value stays in the hover tooltip and in the raw `/api/snapshot` numbers.
+- Bytes auto-scale through B / KB / MB / GB (for example 512 MB / 1.00 GB, not 0.50 GB); at or above 1024 MB/s the rate switches to GB/s.
+- Percentages always show 1 decimal; uptime shows as `1h 00m` / `45m` / `30s`, never as bare seconds; temperature and power units are unchanged.
+
 ## Configuration
 
 | Variable | Default | Notes |
