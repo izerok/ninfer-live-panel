@@ -9,9 +9,9 @@ A read-only live panel for an already-running NInfer server. It deploys, downloa
 
 ## Screenshots
 
-The images below are the real panel UI (dark theme, Chinese UI). The data is simulated, not live ninfer-unc telemetry: the model name carries `(DEMO)`, and the GPU / CPU / disk cards show "unavailable" because the screenshot environment had no GPU tooling or host `/proc` mount.
+The images below are the real panel UI (light theme, Chinese UI). The data is simulated, not live ninfer-unc telemetry: the model name carries `(FAKE)`, and the CPU / disk cards show "unavailable" because the screenshot environment had no host `/proc` mount.
 
-Main panel (v0.1.1 display rules: `tok/s`, `12K`, `180K / 524.3K`, `1h 00m`):
+Main panel (9 metric cards; the requests table shows in-flight requests on top and grey rows for requests observed ending in the past hour below):
 
 ![Main panel](docs/screenshots/panel.png)
 
@@ -31,17 +31,13 @@ docker compose up -d
 
 Open http://127.0.0.1:8091/ . The panel is published to the host loopback only by default; do not change it to `0.0.0.0` for public exposure (see [Security](#security)).
 
-Without compose:
-
 ```bash
+# Without compose:
 docker run -d --name ninfer-panel -p 127.0.0.1:8091:8091 \
   -v ninfer-panel-data:/app/data \
   ghcr.io/izerok/ninfer-live-panel:latest
-```
 
-From source (Python 3.12, no third-party dependencies):
-
-```bash
+# From source (Python 3.12, no third-party dependencies):
 python3 app.py
 ```
 
@@ -50,66 +46,49 @@ python3 app.py
 | Section | Content |
 | --- | --- |
 | Model state | Five states: idle / reading / generating / queued / error. NInfer has no single state field; this is the panel's documented mapping from running / waiting / prefilling / decode_ready, not a server field. |
-| 8 metric cards | Decode and prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a 60-second sparkline (page-local; it is lost on refresh — see History below). |
-| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours, refetches immediately on click, and the x-axis follows the selected window. Hover shows each selected dimension at that moment. Left axis is tok/s, right axis is % (when only % dimensions are selected, the left axis shows % too). Below the curve are the current window's average/peak stats, and Export CSV saves the current window and dimensions as a CSV file. |
-| State events | A log of state changes seen by backend polling (time, old state → new state, reason), capped at 200 entries and stored in the data volume. States only — no prompt or generated content. |
-| Current requests | In-flight slots, one row each: slot id, prompt length, cached portion, context window, share of window. |
-| Context usage | Window limit (`capacity.max_context` from `/v1/load`), KV cache usage, system memory, GPU temperature. |
+| 9 metric cards | Decode speed, prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a sparkline that resumes from backend history after a page refresh (PCIe has link info only, so its sparkline stays dashed). |
+| Current requests | Top rows are in-flight slots: slot id, prompt length, cached portion, context window, share of window, status "In flight". Grey rows below are requests the panel observed ending in the past hour (status "Ended HH:MM"); lengths only, no content; slot ids are reused, so one number can appear twice. Queued requests are a count only, with no per-request detail. |
+| Context usage | Longest in-flight prompt / window limit (`capacity.max_context` from `/v1/load`), plus KV cache, system memory, and GPU temperature rows. |
 | Conversation cache | Retained slot count and host KV, plus cumulative reused tokens. |
+| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours (plus a 7-day range when retention reaches 7 days); hover shows each selected dimension at that moment; below the curve are the current window's average/peak stats, and Export CSV saves the current window and dimensions. The curve is sampled by the backend every 2 seconds and persisted to disk, so it survives page refreshes, restarts, and recreates (with the data volume mounted); only the last 24 hours are kept (retention is configurable). |
+| State events | A log of state changes seen by backend polling (time, old state → new state, reason), capped at 200 entries and stored in the data volume; the curve marks each event's moment with a vertical line (offline red, recovery green, other grey). |
 
-## Settings: edit the NInfer address in the UI
+## Settings
 
-The compose file does **not** hardcode a NInfer address. Click the Settings button in the top right to open a dialog and enter the address there (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart. Close the dialog with the × button, by clicking the backdrop, or with Esc. The dialog also offers Test connection (checks `/health` only, sends no API key, never auto-saves), a page refresh interval (1–10 s, display only — backend sampling is unchanged), and Check for updates (bypasses the 1-hour cache for one manual check).
+The Settings dialog in the top right edits the NInfer address; saving takes effect immediately — no compose edit, no panel restart. Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The dialog also offers Test connection (checks `/health` only, sends no API key, never auto-saves), a page refresh interval (1–10 s, display only — backend sampling is unchanged), a manual Check for updates (bypasses the 1-hour cache), and "Notify in browser when offline" (off by default). The saved value lives in `settings.json` in the data volume.
 
-Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The saved value lives in `settings.json` in the data volume and survives refreshes, restarts, and recreates. Without the data volume, the file lives in the container layer: refresh- and restart-safe, but lost on recreate.
-
-## Why the history survives a refresh
-
-The old sparklines lived only in browser memory, so a refresh wiped them. The history curve is now sampled by the backend every 2 seconds and written to `history.jsonl` in the data volume: it survives page refreshes, container restarts, and recreates (as long as the data volume is mounted), and resumes from disk after a panel restart. Only the last 24 hours are kept; older points are pruned automatically.
-
-The curve contains only aggregate rates (decode / prefill tok/s, KV usage, GPU load) — no prompt or generated text.
-
-## Dark / light and languages
-
-- The button in the top right switches dark / light. Before the user chooses, it follows the system; once chosen, the choice is stored in browser `localStorage`.
-- The language selector in the top right switches 中文 / English, also stored in `localStorage`. Before a choice, the browser language decides (Chinese → Chinese, anything else → English). All UI strings come from one dictionary in the frontend; no external language pack is loaded.
-- To add a language: add a section to the `I18N` dictionary in `web/i18n.js` and an option to the language selector. Missing keys fall back to Chinese. **`web/index.html` contains no UI strings at all**: every visible text and aria-label is filled from `i18n.js` via `data-i18n` / `data-i18n-aria`, so editing copy means editing `i18n.js` only.
+The top-right buttons switch dark / light and 中文 / English; both choices are stored in browser `localStorage`. Before a choice, the theme follows the system and the language follows the browser language. All UI strings come from one dictionary in `web/i18n.js`; `web/index.html` contains no UI strings at all.
 
 ## Data sources and definitions
 
 | Endpoint | Used for |
 | --- | --- |
 | `/health` | Online or not, version |
-| `/v1/load` | Model, uptime, capacity, admitted / running / waiting / prefilling / decode_ready, KV usage, cumulative prefill / decode counts |
+| `/v1/load` | Model, uptime, capacity, admitted / running / waiting / prefilling / decode_ready, KV usage, cumulative counts |
 | `/stats` | Cumulative averages, queue depth, peak admitted |
 | `/metrics` | Requests completed / failed / rejected, KV usage ratio, draft accept rate, cumulative average speeds |
 | `/slots` | Slot totals, in-flight and retained counts; in-flight slots' prompt lengths and cached portions |
 | `nvidia-smi` | GPU load, VRAM, temperature, power (needs the NVIDIA container toolkit and GPU passthrough on the host; otherwise the cards say unavailable) |
 | Host `/proc` (read-only mount) | System memory, CPU, disk throughput (without the mount these say unavailable; the container's own numbers are never substituted) |
 
-Two speeds, kept apart:
-
-- **Instant speed**: the backend samples cumulative counters every 2 seconds and computes (this − last) / interval. The page labels it as such.
-- **15-minute average**: the backend keeps counter samples for 900 seconds and computes the window average; before 15 minutes have passed, the card shows the actual window length instead of pretending it is a 15-minute average.
-- **Cumulative average**: the since-startup average from NInfer's own `/metrics` / `/stats`, shown separately.
+Three speeds, kept apart: **instant speed** is (this − last) / interval from cumulative counters sampled every 2 seconds; the **15-minute average** is computed from counter samples kept for 900 seconds; the **cumulative average** is NInfer's own since-startup average from `/metrics` / `/stats`.
 
 ## What is deliberately not invented
 
 Fields that exist in Strata but not in NInfer are never fabricated:
 
 - **Per-request progress**: `/slots` does not report it, so the progress bar only animates while reading / generating; it never shows a fake percentage.
-- **Request history**: NInfer has no history API, so there is no “recent requests” table; the “current requests” table lists only slots in flight right now. Queued requests are a count only, with no per-request detail.
+- **Request history**: NInfer has no history API, so the grey rows in the table are records the panel itself observed by polling `/slots` in the past hour, not native history; requests from before the panel started or while it was down do not exist and are not backfilled.
 - **Experts in VRAM**: a Strata MoE cache concept that NInfer does not have; the context section uses NInfer's KV cache instead.
 - **PCIe transfer rate**: not reported by NInfer, and a single `nvidia-smi` query only gives the link generation / width, so the PCIe card shows the link and says the rate is not reported.
 - **Generated token counts**: `/slots` has none, so the current-requests table shows prompt length only, not output tokens.
-- **Unreachable fields**: shown as “unavailable”, never as 0 (0 would be misread as a measured value).
+- **Unreachable fields**: shown as "unavailable", never as 0 (0 would be misread as a measured value).
 
 ## Number display rules (display only, values unchanged)
 
 - Speed is always written `tok/s`, never abbreviated to `t/s`; at or above 1000 tok/s it shortens to `k tok/s` (for example 1.23k tok/s).
-- Token counts at or above 1000 shorten to K/M (for example 12.0K, 262K, 180K / 524K); the exact value stays in the hover tooltip and in the raw `/api/snapshot` numbers.
-- Bytes auto-scale through B / KB / MB / GB (for example 512 MB / 1.00 GB, not 0.50 GB); at or above 1024 MB/s the rate switches to GB/s.
-- Percentages always show 1 decimal; uptime shows as `1h 00m` / `45m` / `30s`, never as bare seconds; temperature and power units are unchanged.
+- Token counts at or above 1000 shorten to K/M (for example 12K, 262.1K, 180K / 524.3K); the exact value stays in the hover tooltip and in the raw `/api/snapshot` numbers.
+- Bytes auto-scale through B / KB / MB / GB; at or above 1024 MB/s the rate switches to GB/s; percentages always show 1 decimal; uptime shows as `1h 00m` / `45m` / `30s`.
 
 ## Configuration
 
@@ -119,16 +98,16 @@ Fields that exist in Strata but not in NInfer are never fabricated:
 | `NINFER_API_KEY` | empty | Only if NInfer was started with an API key; the backend sends it as a Bearer token to read endpoints and never puts it in a snapshot or the frontend |
 | `PANEL_BIND` / `PANEL_PORT` | `0.0.0.0` / `8091` | In-container listen address and port; public exposure is controlled by compose's `127.0.0.1:8091:8091` mapping |
 | `POLL_INTERVAL` | `2` | Backend poll interval in seconds |
-| `PANEL_HISTORY_FILE` | `/app/data/history.jsonl` | History curve file |
-| `PANEL_SETTINGS_FILE` | `/app/data/settings.json` | UI-saved address file |
+| `PANEL_HISTORY_FILE` | `/app/data/history.jsonl` | History curve file; events (`events.jsonl`), request records (`requests.json`), and settings (`settings.json`) live in the same directory |
+| `PANEL_HISTORY_RETENTION_SECONDS` | `86400` | History retention in seconds; the history range cap follows it — set 604800 for the 7-day range |
 | `PANEL_UPDATE_CHECK` | `1` | Set to `0` to disable the upgrade check (offline hosts) |
-| `VERSION` (file, not an env var) | repo root | Current version; image and Release tags both come from it |
+| `VERSION` (file) | repo root | Current version; image and Release tags both come from it |
 
 ## Version, upgrade check, and release flow
 
-- **Version**: the `VERSION` file at the repo root is the current version (for example `0.1.0`). The panel shows it in the header, and the image is tagged both `:latest` and `:v0.1.0`.
-- **Upgrade check**: once an hour (cached for 1 hour) the panel asks the public GitHub Releases API for this repository's latest release. It reads a public record only — no token, no panel data, no telemetry. If the check fails or no release exists yet, the banner simply stays hidden. When a newer release exists, a banner appears at the top with a link to the Release. Fully offline hosts can set `PANEL_UPDATE_CHECK=0` to disable it.
-- **Change flow**: `main` is protected; nothing is pushed to it directly. Changes go through a normal PR: branch → push branch → open PR → at least 1 approval + the `build-and-push` check passing → merge. After merging to main, Docker Publish builds and pushes the image, and on a successful build the Release workflow creates a Release automatically (skipped when `VERSION` did not change, so no duplicate releases).
+- The panel header shows the `VERSION` file's version; the image is tagged both `:latest` and `:v<VERSION>`.
+- Upgrade check: once an hour (cached for 1 hour) the panel asks the public GitHub Releases API for this repository's latest release. It reads a public record only — no token, no panel data. If the check fails, the banner simply stays hidden. When a newer release exists, a banner appears at the top with a link to the Release.
+- Change flow: `main` is protected; nothing is pushed to it directly. Changes go through a normal PR: branch → push branch → open PR → at least 1 approval + the `build-and-push` check passing → merge. After merging to main, Docker Publish builds and pushes the image, and on a successful build the Release workflow creates a Release automatically (skipped when `VERSION` did not change, so no duplicate releases).
 
 ## Security
 
@@ -148,11 +127,9 @@ See [SECURITY.md](./SECURITY.md) for the full statement. The essentials:
 | Instant speed is occasionally 0 while generating | No new tokens were committed between two samples; this is real behavior — judge it together with the cumulative average and the curve |
 | History curve is empty | Normal for the first two samples after startup; if it is still empty after a minute, check that the data volume is mounted and look for write errors in the panel log (a write failure falls back to memory-only history and does not break the main panel) |
 
-## Layout source
+## Layout source and development
 
 The layout replicates the `apps/host` Monitor screen of Niko1221/Strata (MIT licensed), with the data source swapped to a local NInfer server. This project is not affiliated with Strata or with NInfer upstream.
-
-## Development
 
 ```bash
 # Frontend changes take effect on page refresh (app.py serves the static page fresh each time)
