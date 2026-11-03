@@ -50,7 +50,8 @@ const I18N = {
     curQueued:' · 排队 {n} 个（排队请求无逐条明细）',
     lastCacheReuse:'累计复用 {x}', lastReq:'上次请求', reusedSince:'自启动以来复用',
     versionLabel:'版本', langAria:'语言 / Language', themeAria:'切换深浅色', closeAria:'关闭', uptimeLabel:'运行', diskWriteGb:'写入 {x} GB/s', updateCheckOff:' · 已关闭升级检查', updateAvailable:'有新版本可用：{v}', viewRelease:'查看 Release',
-    requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} · 当前处理中 {cur} 个 · 排队 {q} 个'
+    requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} · 当前处理中 {cur} 个 · 排队 {q} 个',
+    exportCsv:'导出 CSV', statAvg:'平均', statPeak:'峰值', testConn:'测试连接', testConnOk:'连接正常（/health {s}）', testConnFail:'连接失败：{e}', pollInterval:'刷新间隔', seconds:'秒', checkUpdate:'检查更新', updateLatest:'已是最新版本', updateCheckFailed:'检查失败，请稍后再试', events:'状态事件', eventsEmpty:'暂无状态变化事件'
   },
   'en': {
     title:'Monitor', modelState:'Model state', modelProgress:'Model progress',
@@ -91,7 +92,8 @@ const I18N = {
     curQueued:' · queued {n} (no per-request detail for queued requests)',
     lastCacheReuse:'Cumulative reuse {x}', lastReq:'Last request', reusedSince:'Reused since startup',
     versionLabel:'Version', langAria:'Language', themeAria:'Toggle theme', closeAria:'Close', uptimeLabel:'Uptime', diskWriteGb:'Write {x} GB/s', updateCheckOff:' · update check off', updateAvailable:'A new version is available: {v}', viewRelease:'View release',
-    requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} · in flight {cur} · queued {q}'
+    requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} · in flight {cur} · queued {q}',
+    exportCsv:'Export CSV', statAvg:'Avg', statPeak:'Peak', testConn:'Test connection', testConnOk:'Connection OK (/health {s})', testConnFail:'Connection failed: {e}', pollInterval:'Refresh interval', seconds:'s', checkUpdate:'Check for updates', updateLatest:'Already up to date', updateCheckFailed:'Update check failed, try again later', events:'State events', eventsEmpty:'No state changes yet'
   }
 };
 if (typeof window !== 'undefined') window.I18N = I18N;
