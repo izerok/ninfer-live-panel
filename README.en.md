@@ -7,6 +7,22 @@ A read-only live panel for an already-running NInfer server. It deploys, downloa
 - **GET only, no POST**: it polls `/health`, `/v1/load`, `/stats`, `/metrics`, and `/slots`. No chat, no generation, no model load/unload, no NInfer configuration changes. If NInfer is offline, the panel just shows offline; it never starts NInfer for you.
 - **Image**: `ghcr.io/izerok/ninfer-live-panel:latest` (built and pushed by GitHub Actions on every push to main).
 
+## Screenshots
+
+The images below are the real panel UI (dark theme, Chinese UI). The data is simulated, not live ninfer-unc telemetry: the model name carries `(DEMO)`, and the GPU / CPU / disk cards show "unavailable" because the screenshot environment had no GPU tooling or host `/proc` mount.
+
+Main panel (v0.1.1 display rules: `tok/s`, `12K`, `180K / 524.3K`, `1h 00m`):
+
+![Main panel](docs/screenshots/panel.png)
+
+Settings dialog (opened from the top-right Settings button; changing the NInfer address needs no compose edit):
+
+![Settings dialog](docs/screenshots/settings.png)
+
+History with multiple dimensions (decode + prefill + KV usage + GPU load together, left axis tok/s, right axis %):
+
+![History with multiple dimensions](docs/screenshots/history.png)
+
 ## Quick start
 
 ```bash

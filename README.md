@@ -7,6 +7,22 @@
 - **只 GET，不 POST**：轮询 `/health`、`/v1/load`、`/stats`、`/metrics`、`/slots`，不聊天、不生成、不加载、不卸载模型、不改 NInfer 配置。NInfer 离线时面板只显示离线，不会替你把它拉起来。
 - **镜像**：`ghcr.io/izerok/ninfer-live-panel:latest`（本仓库 push 到 main 后由 GitHub Actions 自动构建推送）。
 
+## 效果图
+
+下图是本面板的真实界面（深色主题、中文界面），数据是模拟 NInfer，不是真实 ninfer-unc 的遥测：模型名带 `(DEMO)`，GPU / CPU / 磁盘卡片显示“不可用”是因为截图环境没有挂载显卡工具和宿主 `/proc`。
+
+主面板（单位已按 v0.1.1 规则显示：`tok/s`、`12K`、`180K / 524.3K`、`1h 00m`）：
+
+![主面板](docs/screenshots/panel.png)
+
+设置弹窗（右上角“设置”打开，改 NInfer 地址不用改 compose）：
+
+![设置弹窗](docs/screenshots/settings.png)
+
+历史曲线多维度（解码 + 预填充 + KV 占用 + GPU 负载同开，左轴 tok/s、右轴 %）：
+
+![历史曲线多维度](docs/screenshots/history.png)
+
 ## 快速开始
 
 ```bash
