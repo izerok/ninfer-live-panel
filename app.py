@@ -701,6 +701,11 @@ class Handler(BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self._send(200, (WEB_DIR / "index.html").read_text(), "text/html; charset=utf-8")
             return
+        # i18n dictionary, kept out of index.html (see web/i18n.js header).
+        # Exact path only — no directory listing, no path traversal.
+        if self.path == "/i18n.js":
+            self._send(200, (WEB_DIR / "i18n.js").read_text(), "application/javascript; charset=utf-8")
+            return
         self._send(404, "not found", "text/plain")
 
 

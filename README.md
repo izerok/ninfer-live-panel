@@ -7,6 +7,22 @@
 - **只 GET，不 POST**：轮询 `/health`、`/v1/load`、`/stats`、`/metrics`、`/slots`，不聊天、不生成、不加载、不卸载模型、不改 NInfer 配置。NInfer 离线时面板只显示离线，不会替你把它拉起来。
 - **镜像**：`ghcr.io/izerok/ninfer-live-panel:latest`（本仓库 push 到 main 后由 GitHub Actions 自动构建推送）。
 
+## 效果图
+
+下图是本面板的真实界面（深色主题、中文界面），数据是模拟 NInfer，不是真实 ninfer-unc 的遥测：模型名带 `(DEMO)`，GPU / CPU / 磁盘卡片显示“不可用”是因为截图环境没有挂载显卡工具和宿主 `/proc`。
+
+主面板（单位已按 v0.1.1 规则显示：`tok/s`、`12K`、`180K / 524.3K`、`1h 00m`）：
+
+![主面板](docs/screenshots/panel.png)
+
+设置弹窗（右上角“设置”打开，改 NInfer 地址不用改 compose）：
+
+![设置弹窗](docs/screenshots/settings.png)
+
+历史曲线多维度（解码 + 预填充 + KV 占用 + GPU 负载同开，左轴 tok/s、右轴 %）：
+
+![历史曲线多维度](docs/screenshots/history.png)
+
 ## 快速开始
 
 ```bash
@@ -35,14 +51,14 @@ python3 app.py
 | --- | --- |
 | 模型状态 | 五态：空闲 / 正在读取 / 正在生成 / 排队中 / 错误。NInfer 没有单一状态字段，这是面板按 running / waiting / prefilling / decode_ready 的公开映射，不是服务端原样字段。 |
 | 8 张指标卡 | 解码与预填充速度、GPU 负载、显存、GPU 温度、功率、PCIe 链路、CPU、磁盘读取。卡片下是最近 60 秒的迷你曲线（页面级，刷新会丢，见历史曲线）。 |
-| 历史曲线 | 解码与预填充速度曲线，可切 15 分钟 / 1 小时 / 24 小时，悬停看某时刻数值。 |
+| 历史曲线 | 解码、预填充、KV 占用、GPU 负载四条曲线，维度图例可多选（选择记在浏览器里）；时间可切 15 分钟 / 1 小时 / 24 小时，点时间立即重新拉取，横轴按所选窗口画；悬停看某时刻各维度数值。左轴是 tok/s，右轴是 %（只选 % 维度时左轴也显示 %）。 |
 | 当前请求 | 当前处理中的 slot 逐条列出：slot 号、prompt 长度、缓存复用、上下文窗口、占窗口比例。 |
 | 上下文占用 | 窗口上限（`/v1/load` 的 `capacity.max_context`）、KV 缓存占用、系统内存、GPU 温度。 |
 | 对话缓存 | 保留的 slot 数与宿主 KV，以及累计复用 token 数。 |
 
 ## 设置：NInfer 地址在界面里改
 
-compose 里**不写死** NInfer 地址。面板顶部的“设置”卡里填地址（例如 `http://host.docker.internal:8080`，或同网容器名 `http://ninfer-unc:8080`），点保存立即生效，不用改 compose、不用重启面板。
+compose 里**不写死** NInfer 地址。点右上角“设置”按钮打开弹窗，在里面填地址（例如 `http://host.docker.internal:8080`，或同网容器名 `http://ninfer-unc:8080`），点保存立即生效，不用改 compose、不用重启面板；弹窗点遮罩、按 Esc 或点 × 都能关。
 
 优先级：**界面保存的地址 > `NINFER_BASE_URL` 环境变量 > 镜像默认地址**。保存的值写在数据卷的 `settings.json` 里，刷新、重启、重建容器都不会丢；不用数据卷时，文件只在容器层里，刷新和重启不丢、重建会丢。
 
@@ -56,7 +72,7 @@ compose 里**不写死** NInfer 地址。面板顶部的“设置”卡里填地
 
 - 右上角按钮切深色 / 浅色：没手动选过时跟随系统，选过一次后记在浏览器 `localStorage` 里。
 - 右上角语言选择框切中文 / English：同样记在 `localStorage` 里；没选过时按浏览器语言判断（中文进中文，其他进英文）。界面文案全部来自前端一本字典，不引任何外部语言包。
-- 加一种语言：在 `web/index.html` 的 `I18N` 字典里加一节，并在语言选择框里加一个 option；缺失的 key 会回退中文。
+- 加一种语言：在 `web/i18n.js` 的 `I18N` 字典里加一节，并在语言选择框里加一个 option；缺失的 key 会回退中文。**`web/index.html` 里不放任何界面文案**：所有可见文字和 aria-label 都由 `data-i18n` / `data-i18n-aria` 从 `i18n.js` 填充，改文案只改 `i18n.js`。
 
 ## 数据来源与口径
 
@@ -86,6 +102,13 @@ Strata 有、NInfer 没有的字段，本面板一律不编：
 - **PCIe 传输速率**：NInfer 不报告，`nvidia-smi` 单次查询也只给链路代宽，PCIe 卡只显示链路，传输速率写“未报告”。
 - **已生成 token 数**：`/slots` 没有，所以当前请求表只有 prompt 长度，没有输出 token 数。
 - **采集未通的字段**：显示“不可用”，不显示 0（0 会被误读成实测值）。
+
+## 数字显示规则（只改显示，不改数值）
+
+- 速度单位一律写 `tok/s`，不缩写成 `t/s`；≥ 1000 tok/s 缩成 `k tok/s`（如 1.23k tok/s）。
+- token 数 ≥ 1000 缩成 K/M（如 12.0K、262K、180K / 524K），精确值保留在悬停提示和 `/api/snapshot` 原始数字里。
+- 字节自动换档 B / KB / MB / GB（如 512 MB / 1.00 GB，不用 0.50 GB）；≥ 1024 MB/s 自动升 GB/s。
+- 百分比统一 1 位小数；运行时间显示为 `1h 00m` / `45m` / `30s`，不显示裸秒数；温度、功率单位不变。
 
 ## 配置
 

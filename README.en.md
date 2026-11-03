@@ -7,6 +7,22 @@ A read-only live panel for an already-running NInfer server. It deploys, downloa
 - **GET only, no POST**: it polls `/health`, `/v1/load`, `/stats`, `/metrics`, and `/slots`. No chat, no generation, no model load/unload, no NInfer configuration changes. If NInfer is offline, the panel just shows offline; it never starts NInfer for you.
 - **Image**: `ghcr.io/izerok/ninfer-live-panel:latest` (built and pushed by GitHub Actions on every push to main).
 
+## Screenshots
+
+The images below are the real panel UI (dark theme, Chinese UI). The data is simulated, not live ninfer-unc telemetry: the model name carries `(DEMO)`, and the GPU / CPU / disk cards show "unavailable" because the screenshot environment had no GPU tooling or host `/proc` mount.
+
+Main panel (v0.1.1 display rules: `tok/s`, `12K`, `180K / 524.3K`, `1h 00m`):
+
+![Main panel](docs/screenshots/panel.png)
+
+Settings dialog (opened from the top-right Settings button; changing the NInfer address needs no compose edit):
+
+![Settings dialog](docs/screenshots/settings.png)
+
+History with multiple dimensions (decode + prefill + KV usage + GPU load together, left axis tok/s, right axis %):
+
+![History with multiple dimensions](docs/screenshots/history.png)
+
 ## Quick start
 
 ```bash
@@ -35,14 +51,14 @@ python3 app.py
 | --- | --- |
 | Model state | Five states: idle / reading / generating / queued / error. NInfer has no single state field; this is the panel's documented mapping from running / waiting / prefilling / decode_ready, not a server field. |
 | 8 metric cards | Decode and prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a 60-second sparkline (page-local; it is lost on refresh — see History below). |
-| History | Decode and prefill speed curves, switchable between 15 minutes / 1 hour / 24 hours, with hover values. |
+| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours, refetches immediately on click, and the x-axis follows the selected window. Hover shows each selected dimension at that moment. Left axis is tok/s, right axis is % (when only % dimensions are selected, the left axis shows % too). |
 | Current requests | In-flight slots, one row each: slot id, prompt length, cached portion, context window, share of window. |
 | Context usage | Window limit (`capacity.max_context` from `/v1/load`), KV cache usage, system memory, GPU temperature. |
 | Conversation cache | Retained slot count and host KV, plus cumulative reused tokens. |
 
 ## Settings: edit the NInfer address in the UI
 
-The compose file does **not** hardcode a NInfer address. Use the Settings card at the top of the panel (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart.
+The compose file does **not** hardcode a NInfer address. Click the Settings button in the top right to open a dialog and enter the address there (for example `http://host.docker.internal:8080`, or `http://ninfer-unc:8080` when NInfer is another container on the same network). Saving takes effect immediately — no compose edit, no panel restart. Close the dialog with the × button, by clicking the backdrop, or with Esc.
 
 Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The saved value lives in `settings.json` in the data volume and survives refreshes, restarts, and recreates. Without the data volume, the file lives in the container layer: refresh- and restart-safe, but lost on recreate.
 
@@ -56,7 +72,7 @@ The curve contains only aggregate rates (decode / prefill tok/s, KV usage, GPU l
 
 - The button in the top right switches dark / light. Before the user chooses, it follows the system; once chosen, the choice is stored in browser `localStorage`.
 - The language selector in the top right switches 中文 / English, also stored in `localStorage`. Before a choice, the browser language decides (Chinese → Chinese, anything else → English). All UI strings come from one dictionary in the frontend; no external language pack is loaded.
-- To add a language: add a section to the `I18N` dictionary in `web/index.html` and an option to the language selector. Missing keys fall back to Chinese.
+- To add a language: add a section to the `I18N` dictionary in `web/i18n.js` and an option to the language selector. Missing keys fall back to Chinese. **`web/index.html` contains no UI strings at all**: every visible text and aria-label is filled from `i18n.js` via `data-i18n` / `data-i18n-aria`, so editing copy means editing `i18n.js` only.
 
 ## Data sources and definitions
 
@@ -86,6 +102,13 @@ Fields that exist in Strata but not in NInfer are never fabricated:
 - **PCIe transfer rate**: not reported by NInfer, and a single `nvidia-smi` query only gives the link generation / width, so the PCIe card shows the link and says the rate is not reported.
 - **Generated token counts**: `/slots` has none, so the current-requests table shows prompt length only, not output tokens.
 - **Unreachable fields**: shown as “unavailable”, never as 0 (0 would be misread as a measured value).
+
+## Number display rules (display only, values unchanged)
+
+- Speed is always written `tok/s`, never abbreviated to `t/s`; at or above 1000 tok/s it shortens to `k tok/s` (for example 1.23k tok/s).
+- Token counts at or above 1000 shorten to K/M (for example 12.0K, 262K, 180K / 524K); the exact value stays in the hover tooltip and in the raw `/api/snapshot` numbers.
+- Bytes auto-scale through B / KB / MB / GB (for example 512 MB / 1.00 GB, not 0.50 GB); at or above 1024 MB/s the rate switches to GB/s.
+- Percentages always show 1 decimal; uptime shows as `1h 00m` / `45m` / `30s`, never as bare seconds; temperature and power units are unchanged.
 
 ## Configuration
 
