@@ -67,9 +67,178 @@ from collections import deque as _deque
 _history = _deque()  # (timestamp, decode_tokens, prefill_tokens)
 _prev_cpu = None  # (timestamp, total_jiffies, idle_jiffies)
 
+# History curve, persisted so a page refresh (or a panel restart, when the
+# data directory is on a volume) does not wipe it. The old page kept its
+# sparklines in browser memory only, which is exactly why a refresh lost
+# them. Points are aggregate rates only — no prompt or generated text.
+HISTORY_FILE = os.environ.get("PANEL_HISTORY_FILE", "/app/data/history.jsonl")
+HISTORY_RETENTION = int(os.environ.get("PANEL_HISTORY_RETENTION_SECONDS", "86400"))
+_series = _deque()  # (timestamp, decode_tok_s, prefill_tok_s, kv_pct, gpu_pct)
+_last_file_prune = 0.0
+
+
+def _history_load():
+    """Load persisted points (within retention) at startup; never fatal."""
+    try:
+        path = Path(HISTORY_FILE)
+        if not path.is_file():
+            return
+        cutoff = time.time() - HISTORY_RETENTION
+        for line in path.read_text().splitlines():
+            try:
+                p = json.loads(line)
+                t = float(p["t"])
+                if t >= cutoff:
+                    _series.append((t, p.get("d"), p.get("p"), p.get("k"), p.get("g")))
+            except (ValueError, KeyError, TypeError):
+                continue
+    except Exception:
+        pass
+
+
+def _history_append(now, decode, prefill, kv_pct, gpu_pct):
+    """Append one point to memory and to the file; prune stale data."""
+    global _last_file_prune
+    _series.append((now, decode, prefill, kv_pct, gpu_pct))
+    cutoff = now - HISTORY_RETENTION
+    while _series and _series[0][0] < cutoff:
+        _series.popleft()
+    try:
+        path = Path(HISTORY_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a") as fh:
+            fh.write(json.dumps(
+                {"t": now, "d": decode, "p": prefill, "k": kv_pct, "g": gpu_pct}) + "\n")
+        if now - _last_file_prune > 3600:
+            _last_file_prune = now
+            with path.open("w") as fh:
+                for t, d, p, k, g in _series:
+                    fh.write(json.dumps({"t": t, "d": d, "p": p, "k": k, "g": g}) + "\n")
+    except Exception:
+        pass  # history falls back to memory-only; never break polling
+
+
+# GUI-editable NInfer address. Precedence: GUI-saved value (settings.json
+# in the data volume) > NINFER_BASE_URL env > built-in default. The compose
+# file no longer hardcodes an address: first run uses the env/default, and
+# the operator changes it from the panel UI instead of editing compose.
+SETTINGS_FILE = os.environ.get(
+    "PANEL_SETTINGS_FILE", str(Path(HISTORY_FILE).parent / "settings.json"))
+_settings = {"ninfer_base_url": None}
+
+
+def _valid_base_url(url):
+    """http(s)://host[:port] only: no userinfo, no fragment, no path query."""
+    try:
+        from urllib.parse import urlparse
+        u = urlparse(url.strip())
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return None
+        if u.username or u.password or u.fragment or u.query:
+            return None
+        if u.path not in ("", "/"):
+            return None
+        if u.port is not None and not (1 <= u.port <= 65535):
+            return None
+        return url.strip().rstrip("/")
+    except Exception:
+        return None
+
+
+def _current_base():
+    with _lock:
+        saved = _settings.get("ninfer_base_url")
+    return saved or BASE
+
+
+def _settings_load():
+    try:
+        path = Path(SETTINGS_FILE)
+        if path.is_file():
+            data = json.loads(path.read_text())
+            url = _valid_base_url(data.get("ninfer_base_url", ""))
+            if url:
+                _settings["ninfer_base_url"] = url
+    except Exception:
+        pass
+
+
+def _settings_save(url):
+    path = Path(SETTINGS_FILE)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"ninfer_base_url": url}))
+    tmp.replace(path)
+    with _lock:
+        _settings["ninfer_base_url"] = url
+    global _prev
+    _prev = None
+    _history.clear()
+
+
+# Version + upgrade check. The panel reports its own VERSION and, once an
+# hour, asks the public GitHub Releases API whether a newer release exists.
+# It sends nothing (no token, no telemetry, no panel data); it only reads
+# the public latest-release record. Set PANEL_UPDATE_CHECK=0 to disable it
+# (e.g. fully offline hosts); a failed check is "unavailable", never an error.
+def _panel_version():
+    try:
+        return (Path(__file__).resolve().parent / "VERSION").read_text().strip()
+    except Exception:
+        return "0.0.0-dev"
+
+
+def _version_tuple(v):
+    out = []
+    for part in v.lstrip("vV").split("."):
+        digits = "".join(c for c in part if c.isdigit())
+        out.append(int(digits) if digits else 0)
+    return tuple(out)
+
+
+def _is_newer(latest, current):
+    try:
+        return _version_tuple(latest) > _version_tuple(current)
+    except Exception:
+        return False
+
+
+_UPDATE_REPO = os.environ.get("PANEL_UPDATE_REPO", "izerok/ninfer-live-panel")
+_UPDATE_ENABLED = os.environ.get("PANEL_UPDATE_CHECK", "1") != "0"
+_update_cache = {"at": 0.0, "data": None}
+
+
+def _update_check():
+    current = _panel_version()
+    if not _UPDATE_ENABLED:
+        return {"enabled": False, "current": current, "latest": None,
+                "update_available": False, "url": None}
+    now = time.time()
+    if _update_cache["data"] is not None and now - _update_cache["at"] < 3600:
+        return _update_cache["data"]
+    result = {"enabled": True, "current": current, "latest": None,
+              "update_available": False, "url": None, "checked_at": now}
+    try:
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{_UPDATE_REPO}/releases/latest",
+            headers={"Accept": "application/vnd.github+json",
+                     "User-Agent": "ninfer-live-panel"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+        tag = data.get("tag_name")
+        if tag:
+            result["latest"] = tag
+            result["url"] = data.get("html_url")
+            result["update_available"] = _is_newer(tag, current)
+    except Exception:
+        pass  # offline / no release yet / API hiccup: banner simply stays hidden
+    _update_cache["at"] = now
+    _update_cache["data"] = result
+    return result
+
 
 def _get(path, timeout=3):
-    req = urllib.request.Request(BASE + path)
+    req = urllib.request.Request(_current_base() + path)
     if API_KEY:
         req.add_header("Authorization", "Bearer " + API_KEY)
     req.add_header("Accept", "application/json, text/plain")
@@ -248,7 +417,7 @@ def _host_mem():
 def _poll_once():
     global _prev
     now = time.time()
-    snap = {"as_of": now, "ninfer_base_url": BASE, "ninfer_ok": False,
+    snap = {"as_of": now, "ninfer_base_url": _current_base(), "ninfer_ok": False,
             "state": "offline", "error": None}
     try:
         status, health_body = _get("/health", timeout=3)
@@ -259,7 +428,7 @@ def _poll_once():
             snap["error"] = f"/health -> HTTP {status} status={health.get('status')}"
             return snap
     except Exception as exc:  # unreachable, timeout, bad JSON: all mean offline
-        snap["error"] = f"cannot reach {BASE}/health: {exc}"
+        snap["error"] = f"cannot reach {_current_base()}/health: {exc}"
         return snap
 
     try:
@@ -418,6 +587,11 @@ def _poll_once():
     snap["host_memory"] = _host_mem()
     snap["host_cpu"] = _host_cpu()
     snap["host_disk"] = _host_disk()
+    gpu_util = None
+    if snap["gpu"].get("available") and snap["gpu"].get("cards"):
+        gpu_util = snap["gpu"]["cards"][0].get("util_percent")
+    _history_append(now, decode_rate, prefill_rate,
+                    (kv_tokens / kv_cap * 100.0) if kv_cap else None, gpu_util)
     return snap
 
 
@@ -427,7 +601,7 @@ def _poller():
             snap = _poll_once()
         except Exception as exc:  # never kill the poller on a bad sample
             snap = {"ninfer_ok": False, "state": "offline", "error": str(exc),
-                    "as_of": time.time(), "ninfer_base_url": BASE}
+                    "as_of": time.time(), "ninfer_base_url": _current_base()}
         with _lock:
             _snapshot.clear()
             _snapshot.update(snap)
@@ -447,7 +621,78 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):
+        if self.path == "/api/settings":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                data = json.loads(self.rfile.read(length).decode("utf-8"))
+                url = _valid_base_url(data.get("ninfer_base_url", ""))
+            except Exception:
+                url = None
+            if not url:
+                self._send(400, json.dumps(
+                    {"error": "invalid ninfer_base_url: expected http(s)://host[:port], no userinfo, no path"}),
+                    "application/json")
+                return
+            try:
+                _settings_save(url)
+            except Exception as exc:
+                self._send(500, json.dumps({"error": str(exc)}), "application/json")
+                return
+            self._send(200, json.dumps(
+                {"ninfer_base_url": url, "source": "gui"}), "application/json")
+            return
+        self._send(404, "not found", "text/plain")
+
     def do_GET(self):
+        if self.path.startswith("/api/history"):
+            from urllib.parse import urlparse, parse_qs
+            try:
+                minutes = int(parse_qs(urlparse(self.path).query).get("minutes", ["60"])[0])
+            except ValueError:
+                minutes = 60
+            minutes = max(5, min(1440, minutes))
+            now = time.time()
+            with _lock:
+                pts = [p for p in list(_series) if p[0] >= now - minutes * 60]
+            # Downsample to at most 720 points (bucket averages, nulls skipped).
+            if len(pts) > 720:
+                span = max(1.0, pts[-1][0] - pts[0][0])
+                bucket = span / 720.0
+                grouped = {}
+                for t, d, p, k, g in pts:
+                    grouped.setdefault(int((t - pts[0][0]) / bucket), []).append((t, d, p, k, g))
+                out = []
+                for vals in grouped.values():
+                    def avg(idx):
+                        vs = [v[idx] for v in vals if v[idx] is not None]
+                        return sum(vs) / len(vs) if vs else None
+                    out.append({"t": vals[len(vals) // 2][0], "decode": avg(1),
+                                "prefill": avg(2), "kv": avg(3), "gpu": avg(4)})
+                pts = out
+            else:
+                pts = [{"t": t, "decode": d, "prefill": p, "kv": k, "gpu": g}
+                       for t, d, p, k, g in pts]
+            self._send(200, json.dumps({"samples": pts, "minutes": minutes,
+                                        "retention_seconds": HISTORY_RETENTION}),
+                       "application/json")
+            return
+        if self.path == "/api/version":
+            self._send(200, json.dumps(
+                {"version": _panel_version(),
+                 "update_check_enabled": _UPDATE_ENABLED}), "application/json")
+            return
+        if self.path == "/api/update-check":
+            self._send(200, json.dumps(_update_check()), "application/json")
+            return
+        if self.path == "/api/settings":
+            with _lock:
+                saved = _settings.get("ninfer_base_url")
+            self._send(200, json.dumps({
+                "ninfer_base_url": _current_base(),
+                "source": "gui" if saved else "env_or_default",
+                "default": BASE}), "application/json")
+            return
         if self.path in ("/api/health", "/api/snapshot"):
             with _lock:
                 body = json.dumps(_snapshot)
@@ -460,7 +705,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    _history_load()
+    _settings_load()
     threading.Thread(target=_poller, daemon=True).start()
-    print(f"ninfer-live-panel: polling {BASE} every {POLL}s, listening on {BIND}:{PORT}",
+    print(f"ninfer-live-panel: polling {_current_base()} every {POLL}s, listening on {BIND}:{PORT}",
           flush=True)
     ThreadingHTTPServer((BIND, PORT), Handler).serve_forever()

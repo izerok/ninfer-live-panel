@@ -2,6 +2,7 @@
 # No personal token is used: the workflow logs in with GITHUB_TOKEN only.
 # The image contains no inference engine and no model; it only polls an
 # already-running NInfer server (see README.md / SECURITY.md).
+# Tags pushed: :latest and :v<VERSION> (VERSION file at repo root).
 name: Docker Publish
 
 on:
@@ -19,6 +20,9 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@v4
+      - name: Read version
+        id: version
+        run: echo "version=v$(cat VERSION | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR
         uses: docker/login-action@v3
         with:
@@ -32,3 +36,4 @@ jobs:
           push: true
           tags: |
             ghcr.io/${{ github.repository_owner }}/ninfer-live-panel:latest
+            ghcr.io/${{ github.repository_owner }}/ninfer-live-panel:${{ steps.version.outputs.version }}

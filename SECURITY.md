@@ -36,6 +36,12 @@
 - **容器内以非 root 运行**（uid/gid 10001），无特权、无宿主网络、
   无 Docker socket 挂载，不能反过来控制宿主或 NInfer。
 
+## 写盘的数据
+
+- **历史曲线**（`history.jsonl`）：只有聚合速度（解码 / 预填充 tok/s、KV 占用、GPU 负载）与时间戳，不含提示词、生成内容、模型权重、密钥。
+- **界面设置**（`settings.json`）：只有界面保存的 NInfer 地址一个字段，不含 API key；API key 仍只走环境变量，绝不写进这两个文件。
+- 两个文件都在数据卷里；删卷即删数据，不会同步到任何外部服务。
+
 ## 构建与发布
 
 - GitHub Actions 工作流（`.github/workflows/docker-publish.yml`）

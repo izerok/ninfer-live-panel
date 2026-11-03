@@ -1,0 +1,37 @@
+# After a successful Docker Publish on main, create a GitHub Release for
+# the VERSION in the repo root — but only if that tag does not exist yet.
+# So: docs-only merges create no release, and a version bump (in a PR, per
+# branch protection) creates exactly one release once its image is built.
+# Uses the gh CLI with GITHUB_TOKEN only; no third-party release action.
+name: Release
+
+on:
+  workflow_run:
+    workflows: ["Docker Publish"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Create release if the version tag is new
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="v$(cat VERSION | tr -d '[:space:]')"
+          if gh release view "$VERSION" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; nothing to do."
+            exit 0
+          fi
+          gh release create "$VERSION" --repo "${{ github.repository }}" \
+            --title "$VERSION" --generate-notes \
+            --notes "Image: ghcr.io/${{ github.repository_owner }}/ninfer-live-panel:$VERSION and :latest"
