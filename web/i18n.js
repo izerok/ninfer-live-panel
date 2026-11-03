@@ -14,17 +14,17 @@ const I18N = {
   'zh-CN': {
     title:'监控', modelState:'模型状态', modelProgress:'模型进度',
     decodeSpeed:'解码速度', prefillSpeed:'预填充速度', gpuLoad:'GPU 负载', vram:'显存', temp:'GPU 温度', power:'功率',
-    pcie:'PCIe', cpu:'CPU', diskRead:'磁盘读取',
-    history:'历史曲线', legendDecode:'解码 tok/s', legendPrefill:'预填充 tok/s', legendKv:'KV 占用 %', legendGpu:'GPU 负载 %',
-    histNoDims:'至少选择一个维度', histTipDecode:'解码', histTipPrefill:'预填充', histTipKv:'KV 占用', histTipGpu:'GPU 负载',
+    pcie:'PCIe', cpu:'CPU', diskRead:'磁盘读取', outTokens:'输出 Tokens', outTokensSub:'自启动累计',
+    history:'历史曲线', legendDecode:'解码 tok/s', legendPrefill:'预填充 tok/s', legendKv:'KV 占用 %', legendGpu:'GPU 负载 %', legendCum:'累计产出', histPanelRates:'速度', histPanelUtil:'占用',
+    histNoDims:'至少选择一个维度', histTipDecode:'解码', histTipPrefill:'预填充', histTipKv:'KV 占用', histTipGpu:'GPU 负载', histTipCum:'累计产出',
     range15:'15 分钟', range60:'1 小时', range1440:'24 小时',
     histNote:'曲线是后端每 2 秒采样的聚合速度，写盘保存在面板数据卷里：刷新页面、重启容器都不会丢，面板重启后从盘里续上。只保留最近 24 小时，不含任何提示词或生成内容。',
     histCollecting:'采集中…（至少两次采样后画出曲线，刷新页面不会丢）', cumOutTitle:'累计产出（decode tokens，随时间累计）', cumOut:'累计产出', cumWindow:'本窗口', cumNoData:'暂无累计产出数据',
     context:'上下文占用', kvCache:'KV 缓存', sysMem:'系统内存', gpuTemp:'GPU 温度',
     contextNote:'上下文占用取处理中请求的最长 prompt / 窗口上限；无进行中请求时为 0。KV 缓存一栏是 NInfer 的对应项，Strata 原栏为“显存中的专家”。',
     currentReq:'当前请求', slot:'Slot', prompt:'Prompt', cached:'缓存复用', ctxWindow:'上下文窗口', shareWindow:'占窗口',
-    reqStatus:'状态', reqActive:'进行中', reqEnded:'已结束 {t}', reqPastEnded:' · 过去 1 小时已结束 {n} 条',
-    currentNote:'NInfer 不提供历史请求接口，也不提供排队请求的逐条明细：本表上半列当前处理中的 slot（来自 /slots），下半灰色行是面板过去 1 小时内观测到的已结束请求；排队只给个数。/slots 没有已生成 token 数，所以这里只有 prompt 长度，没有输出 token 数。',
+    reqStatus:'状态', reqAvgDecode:'平均 decode', reqProcTime:'处理时间', reqAvgTip:'期间平均 decode 速度', reqActive:'进行中', reqEnded:'已结束 {t}', reqPastEnded:' · 过去 1 小时已结束 {n} 条',
+    currentNote:'NInfer 不提供历史请求接口，也不提供排队请求的逐条明细：本表上半列当前处理中的 slot（来自 /slots），下半灰色行是面板过去 1 小时内观测到的已结束请求；排队只给个数。/slots 没有已生成 token 数，所以这里只有 prompt 长度，没有输出 token 数。“平均 decode”一栏是该请求处理时段内面板整体的平均解码速率，不是单请求自己的速度：NInfer 不报单请求的已生成 token 数，单请求速度算不出来，不造数。',
     reqHistoryNote:'灰色行是面板轮询 /slots 时观测到的记录，不是 NInfer 原生历史：面板启动前、停机期间的请求不存在，不补；slot 号会复用，同一编号可能出现两次（一条进行中、一条已结束）。',
     cache:'对话缓存', parkedSessions:'保留的会话', theirMem:'他们的内存（宿主 KV）',
     cacheNote:'保留的 slot 可从已保存状态恢复。NInfer 的上下文缓存细节见上下文占用一栏；本栏的“保留的会话”即 /slots 的 retained slot 数。',
@@ -54,22 +54,22 @@ const I18N = {
     versionLabel:'版本', langAria:'语言 / Language', themeAria:'切换深浅色', closeAria:'关闭', uptimeLabel:'运行', diskWriteGb:'写入 {x} GB/s', updateCheckOff:' · 已关闭升级检查', updateAvailable:'有新版本可用：{v}', viewRelease:'查看 Release',
     requestTotals:'共 {total} 个请求 · 解码均值 {d} tok/s · 预填充均值 {p} tok/s · 累计复用 {r} · 当前处理中 {cur} 个 · 排队 {q} 个',
     exportCsv:'导出 CSV', statAvg:'平均', statPeak:'峰值', testConn:'测试连接', testConnOk:'连接正常（/health {s}）', testConnFail:'连接失败：{e}', pollInterval:'刷新间隔', seconds:'秒', checkUpdate:'检查更新', updateLatest:'已是最新版本', updateCheckFailed:'检查失败，请稍后再试', events:'状态事件', eventsEmpty:'暂无状态变化事件',
-    range10080:'7 天', lastOnline:'上次在线 {t}', offlineFor:'已离线 {d}', notifyOffline:'离线时发浏览器通知', hidePcie:'隐藏 PCIe 卡片', notifyOfflineTitle:'NInfer 离线', notifyOfflineBody:'面板检测到 NInfer 已离线'
+    range10080:'7 天', lastOnline:'上次在线 {t}', offlineFor:'已离线 {d}', notifyOffline:'离线时发浏览器通知', hidePcie:'隐藏 PCIe 卡片', hideDisk:'隐藏磁盘读取卡片', notifyOfflineTitle:'NInfer 离线', notifyOfflineBody:'面板检测到 NInfer 已离线'
   },
   'en': {
     title:'Monitor', modelState:'Model state', modelProgress:'Model progress',
     decodeSpeed:'Decode speed', prefillSpeed:'Prefill speed', gpuLoad:'GPU load', vram:'VRAM', temp:'GPU temp', power:'Power',
-    pcie:'PCIe', cpu:'CPU', diskRead:'Disk read',
-    history:'History', legendDecode:'Decode tok/s', legendPrefill:'Prefill tok/s', legendKv:'KV usage %', legendGpu:'GPU load %',
-    histNoDims:'Select at least one dimension', histTipDecode:'Decode', histTipPrefill:'Prefill', histTipKv:'KV usage', histTipGpu:'GPU load',
+    pcie:'PCIe', cpu:'CPU', diskRead:'Disk read', outTokens:'Output tokens', outTokensSub:'Since startup',
+    history:'History', legendDecode:'Decode tok/s', legendPrefill:'Prefill tok/s', legendKv:'KV usage %', legendGpu:'GPU load %', legendCum:'Cumulative output', histPanelRates:'Speed', histPanelUtil:'Usage',
+    histNoDims:'Select at least one dimension', histTipDecode:'Decode', histTipPrefill:'Prefill', histTipKv:'KV usage', histTipGpu:'GPU load', histTipCum:'Cumulative output',
     range15:'15 min', range60:'1 hour', range1440:'24 hours',
     histNote:'The curve is sampled by the backend every 2 s and persisted to the panel data volume: it survives page refreshes, container restarts, and recreates, and resumes from disk after a panel restart. Only the last 24 hours are kept. It contains no prompt or generated text.',
     histCollecting:'Collecting… (the curve appears after at least two samples; refreshing the page will not lose it)', cumOutTitle:'Cumulative output (decode tokens, over time)', cumOut:'Cumulative output', cumWindow:'This window', cumNoData:'No cumulative output data yet',
     context:'Context usage', kvCache:'KV cache', sysMem:'System memory', gpuTemp:'GPU temp',
     contextNote:'Context usage is the longest in-flight prompt / window limit; 0 when nothing is in flight. The KV cache row is the NInfer counterpart of Strata\u2019s “experts in VRAM” row.',
     currentReq:'Current requests', slot:'Slot', prompt:'Prompt', cached:'Cached', ctxWindow:'Context window', shareWindow:'Share of window',
-    reqStatus:'Status', reqActive:'In flight', reqEnded:'Ended {t}', reqPastEnded:' · ended in past 1h: {n}',
-    currentNote:'NInfer provides no request-history API and no per-request detail for queued requests: the top rows are in-flight slots (from /slots), the grey rows below are requests the panel observed ending in the past hour; queued requests are shown as a count only. /slots has no generated-token count, so only prompt length is shown, not output tokens.',
+    reqStatus:'Status', reqAvgDecode:'Avg decode', reqProcTime:'Duration', reqAvgTip:'Average decode speed during this window', reqActive:'In flight', reqEnded:'Ended {t}', reqPastEnded:' · ended in past 1h: {n}',
+    currentNote:'NInfer provides no request-history API and no per-request detail for queued requests: the top rows are in-flight slots (from /slots), the grey rows below are requests the panel observed ending in the past hour; queued requests are shown as a count only. /slots has no generated-token count, so only prompt length is shown, not output tokens. The “Avg decode” column is the panel-wide average decode rate over the request’s processing window, not the request’s own speed: NInfer reports no per-request generated-token count, so a per-request speed cannot be computed and is not invented.',
     reqHistoryNote:'Grey rows are records the panel observed while polling /slots, not native NInfer history: requests from before the panel started or while it was down do not exist and are not backfilled; slot ids are reused, so one number can appear twice (one in flight, one ended).',
     cache:'Conversation cache', parkedSessions:'Parked sessions', theirMem:'Their memory (host KV)',
     cacheNote:'Parked slots can resume from saved state. See the context section for NInfer cache details; “parked sessions” here is the /slots retained-slot count.',
@@ -99,7 +99,7 @@ const I18N = {
     versionLabel:'Version', langAria:'Language', themeAria:'Toggle theme', closeAria:'Close', uptimeLabel:'Uptime', diskWriteGb:'Write {x} GB/s', updateCheckOff:' · update check off', updateAvailable:'A new version is available: {v}', viewRelease:'View release',
     requestTotals:'{total} requests total · decode avg {d} tok/s · prefill avg {p} tok/s · cumulative reuse {r} · in flight {cur} · queued {q}',
     exportCsv:'Export CSV', statAvg:'Avg', statPeak:'Peak', testConn:'Test connection', testConnOk:'Connection OK (/health {s})', testConnFail:'Connection failed: {e}', pollInterval:'Refresh interval', seconds:'s', checkUpdate:'Check for updates', updateLatest:'Already up to date', updateCheckFailed:'Update check failed, try again later', events:'State events', eventsEmpty:'No state changes yet',
-    range10080:'7 days', lastOnline:'Last online {t}', offlineFor:'Offline for {d}', notifyOffline:'Notify in browser when offline', hidePcie:'Hide PCIe card', notifyOfflineTitle:'NInfer offline', notifyOfflineBody:'The panel detected NInfer is offline'
+    range10080:'7 days', lastOnline:'Last online {t}', offlineFor:'Offline for {d}', notifyOffline:'Notify in browser when offline', hidePcie:'Hide PCIe card', hideDisk:'Hide disk read card', notifyOfflineTitle:'NInfer offline', notifyOfflineBody:'The panel detected NInfer is offline'
   }
 };
 if (typeof window !== 'undefined') window.I18N = I18N;
