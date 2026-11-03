@@ -11,7 +11,7 @@ A read-only live panel for an already-running NInfer server. It deploys, downloa
 
 The images below are the real panel UI (light theme, Chinese UI). The data is simulated, not live ninfer-unc telemetry: the model name carries `(FAKE)`, and the CPU / disk cards show "unavailable" because the screenshot environment had no host `/proc` mount.
 
-Main panel (9 metric cards; the requests table shows in-flight requests on top and grey rows for requests observed ending in the past hour below):
+Main panel (9 metric cards, the PCIe card can be hidden from Settings; the requests table shows in-flight requests on top and grey rows for requests observed ending in the past hour below):
 
 ![Main panel](docs/screenshots/panel.png)
 
@@ -19,7 +19,7 @@ Settings dialog (opened from the top-right Settings button; changing the NInfer 
 
 ![Settings dialog](docs/screenshots/settings.png)
 
-History with multiple dimensions (decode + prefill + KV usage + GPU load together, left axis tok/s, right axis %):
+History with multiple dimensions (15 minutes by default; decode + prefill + KV usage + GPU load together, legend shows latest values, left axis tok/s, right axis %):
 
 ![History with multiple dimensions](docs/screenshots/history.png)
 
@@ -46,16 +46,16 @@ python3 app.py
 | Section | Content |
 | --- | --- |
 | Model state | Five states: idle / reading / generating / queued / error. NInfer has no single state field; this is the panel's documented mapping from running / waiting / prefilling / decode_ready, not a server field. |
-| 9 metric cards | Decode speed, prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a sparkline that resumes from backend history after a page refresh (PCIe has link info only, so its sparkline stays dashed). |
-| Current requests | Top rows are in-flight slots: slot id, prompt length, cached portion, context window, share of window, status "In flight". Grey rows below are requests the panel observed ending in the past hour (status "Ended HH:MM"); lengths only, no content; slot ids are reused, so one number can appear twice. Queued requests are a count only, with no per-request detail. |
+| 9 metric cards | Decode speed, prefill speed, GPU load, VRAM, GPU temperature, power, PCIe link, CPU, disk read. Each card has a sparkline that resumes from backend history after a page refresh (PCIe has link info only, so its sparkline stays dashed). The PCIe card can be hidden from Settings (shown by default; hiding affects only this browser's view, polling continues). |
+| Current requests | Top rows are in-flight slots: slot id, prompt length, cached portion (length · share of prompt, e.g. 4K · 33.3%), context window, share of window, status "In flight". Grey rows below are requests the panel observed ending in the past hour (status "Ended HH:MM"); lengths only, no content; slot ids are reused, so one number can appear twice. Queued requests are a count only, with no per-request detail. |
 | Context usage | Longest in-flight prompt / window limit (`capacity.max_context` from `/v1/load`), plus KV cache, system memory, and GPU temperature rows. |
 | Conversation cache | Retained slot count and host KV, plus cumulative reused tokens. |
-| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser). Time range switches between 15 minutes / 1 hour / 24 hours (plus a 7-day range when retention reaches 7 days); hover shows each selected dimension at that moment; below the curve are the current window's average/peak stats, and Export CSV saves the current window and dimensions. The curve is sampled by the backend every 2 seconds and persisted to disk, so it survives page refreshes, restarts, and recreates (with the data volume mounted); only the last 24 hours are kept (retention is configurable). |
+| History | Four curves — decode, prefill, KV usage, GPU load — with multi-select dimension toggles in the legend (selection is stored in the browser), and the legend shows each dimension's latest value. The default range is 15 minutes; time range switches between 15 minutes / 1 hour / 24 hours (plus a 7-day range when retention reaches 7 days); hover shows each selected dimension at that moment; below the curve are the current window's average/peak stats, and Export CSV saves the current window and dimensions. The curve is sampled by the backend every 2 seconds and persisted to disk, so it survives page refreshes, restarts, and recreates (with the data volume mounted); only the last 24 hours are kept (retention is configurable). When the data span is shorter than the selected window, the axis fits the data span so the curve always fills the chart, and the time ticks adapt to the span. |
 | State events | A log of state changes seen by backend polling (time, old state → new state, reason), capped at 200 entries and stored in the data volume; the curve marks each event's moment with a vertical line (offline red, recovery green, other grey). |
 
 ## Settings
 
-The Settings dialog in the top right edits the NInfer address; saving takes effect immediately — no compose edit, no panel restart. Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The dialog also offers Test connection (checks `/health` only, sends no API key, never auto-saves), a page refresh interval (1–10 s, display only — backend sampling is unchanged), a manual Check for updates (bypasses the 1-hour cache), and "Notify in browser when offline" (off by default). The saved value lives in `settings.json` in the data volume.
+The Settings dialog in the top right edits the NInfer address; saving takes effect immediately — no compose edit, no panel restart. Precedence: **UI-saved address > `NINFER_BASE_URL` environment variable > image default**. The dialog also offers Test connection (checks `/health` only, sends no API key, never auto-saves), a page refresh interval (1–10 s, display only — backend sampling is unchanged), a manual Check for updates (bypasses the 1-hour cache), "Notify in browser when offline" (off by default), and "Hide PCIe card" (off by default, affects only this browser's view). The saved value lives in `settings.json` in the data volume.
 
 The top-right buttons switch dark / light and 中文 / English; both choices are stored in browser `localStorage`. Before a choice, the theme follows the system and the language follows the browser language. All UI strings come from one dictionary in `web/i18n.js`; `web/index.html` contains no UI strings at all.
 
@@ -86,7 +86,8 @@ Fields that exist in Strata but not in NInfer are never fabricated:
 
 ## Number display rules (display only, values unchanged)
 
-- Speed is always written `tok/s`, never abbreviated to `t/s`; at or above 1000 tok/s it shortens to `k tok/s` (for example 1.23k tok/s).
+- Speed is always written `tok/s`, never abbreviated to `t/s`; decode at or above 1000 tok/s shortens to `k tok/s` (for example 1.23k tok/s), while prefill is always shown raw, never shortened to k (for example 1245.3 tok/s).
+- The cached column shows "length · share of prompt" (for example 4K · 33.3%).
 - Token counts at or above 1000 shorten to K/M (for example 12K, 262.1K, 180K / 524.3K); the exact value stays in the hover tooltip and in the raw `/api/snapshot` numbers.
 - Bytes auto-scale through B / KB / MB / GB; at or above 1024 MB/s the rate switches to GB/s; percentages always show 1 decimal; uptime shows as `1h 00m` / `45m` / `30s`.
 
