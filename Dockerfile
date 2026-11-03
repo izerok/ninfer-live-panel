@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 RUN groupadd -r ninfer-panel --gid 10001 \
  && useradd -r -g ninfer-panel --uid 10001 ninfer-panel \
- && mkdir -p /app/web \
+ && mkdir -p /app/web /app/data \
  && chown -R ninfer-panel:ninfer-panel /app
 
 WORKDIR /app
