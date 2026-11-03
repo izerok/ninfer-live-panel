@@ -245,39 +245,6 @@
     </section>
   </div>
 
-  <!-- 历史曲线：后端落盘，刷新页面不丢失 -->
-  <section class="st-card" data-i18n-aria="history">
-    <div class="hist-head">
-      <h2 data-i18n="history"></h2>
-      <div class="hist-legend" id="histLegend">
-        <button type="button" class="dim-btn" data-dim="decode" data-active="true"><i style="background:#10b981"></i><span data-i18n="legendDecode"></span></button>
-        <button type="button" class="dim-btn" data-dim="prefill" data-active="true"><i style="background:#38bdf8"></i><span data-i18n="legendPrefill"></span></button>
-        <button type="button" class="dim-btn" data-dim="kv" data-active="false"><i style="background:#f59e0b"></i><span data-i18n="legendKv"></span></button>
-        <button type="button" class="dim-btn" data-dim="gpu" data-active="false"><i style="background:#a78bfa"></i><span data-i18n="legendGpu"></span></button>
-      </div>
-      <div class="range" id="histRange">
-        <button type="button" data-minutes="15" data-i18n="range15"></button>
-        <button type="button" data-minutes="60" data-active="true" data-i18n="range60"></button>
-        <button type="button" data-minutes="1440" data-i18n="range1440"></button>
-        <button type="button" id="range10080Btn" data-minutes="10080" data-i18n="range10080"></button>
-      </div>
-      <button type="button" class="theme-btn" id="exportHistBtn" data-i18n="exportCsv"></button>
-    </div>
-    <div class="hist-wrap">
-      <canvas id="histCanvas"></canvas>
-      <div class="hist-tip" id="histTip"></div>
-    </div>
-    <div class="small" id="histStats" style="margin-top:8px"></div>
-    <p class="small muted" style="margin:10px 0 0" data-i18n="histNote"></p>
-  </section>
-
-  <!-- 状态事件：只记轮询到的状态变化，不新增 NInfer 调用 -->
-  <section class="st-card" data-i18n-aria="events">
-    <h2 data-i18n="events"></h2>
-    <ul id="eventList" style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8"></ul>
-    <p class="small muted" id="eventsEmpty" style="display:none" data-i18n="eventsEmpty"></p>
-  </section>
-
   <!-- 上下文占用 + 当前请求 -->
   <div class="monitor-context-requests">
     <section class="st-card monitor-context">
@@ -319,6 +286,39 @@
       <div><dt data-i18n="reusedSince"></dt><dd id="reusedTotalText">—</dd></div>
     </dl>
     <p class="small muted" data-i18n="cacheNote"></p>
+  </section>
+
+  <!-- 历史曲线：后端落盘，刷新页面不丢失 -->
+  <section class="st-card" data-i18n-aria="history">
+    <div class="hist-head">
+      <h2 data-i18n="history"></h2>
+      <div class="hist-legend" id="histLegend">
+        <button type="button" class="dim-btn" data-dim="decode" data-active="true"><i style="background:#10b981"></i><span data-i18n="legendDecode"></span></button>
+        <button type="button" class="dim-btn" data-dim="prefill" data-active="true"><i style="background:#38bdf8"></i><span data-i18n="legendPrefill"></span></button>
+        <button type="button" class="dim-btn" data-dim="kv" data-active="false"><i style="background:#f59e0b"></i><span data-i18n="legendKv"></span></button>
+        <button type="button" class="dim-btn" data-dim="gpu" data-active="false"><i style="background:#a78bfa"></i><span data-i18n="legendGpu"></span></button>
+      </div>
+      <div class="range" id="histRange">
+        <button type="button" data-minutes="15" data-i18n="range15"></button>
+        <button type="button" data-minutes="60" data-active="true" data-i18n="range60"></button>
+        <button type="button" data-minutes="1440" data-i18n="range1440"></button>
+        <button type="button" id="range10080Btn" data-minutes="10080" data-i18n="range10080"></button>
+      </div>
+      <button type="button" class="theme-btn" id="exportHistBtn" data-i18n="exportCsv"></button>
+    </div>
+    <div class="hist-wrap">
+      <canvas id="histCanvas"></canvas>
+      <div class="hist-tip" id="histTip"></div>
+    </div>
+    <div class="small" id="histStats" style="margin-top:8px"></div>
+    <p class="small muted" style="margin:10px 0 0" data-i18n="histNote"></p>
+  </section>
+
+  <!-- 状态事件：只记轮询到的状态变化，不新增 NInfer 调用 -->
+  <section class="st-card" data-i18n-aria="events">
+    <h2 data-i18n="events"></h2>
+    <ul id="eventList" style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.8"></ul>
+    <p class="small muted" id="eventsEmpty" style="display:none" data-i18n="eventsEmpty"></p>
   </section>
 
   <p class="small muted" data-i18n="footerNote"></p>
