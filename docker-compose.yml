@@ -1,0 +1,50 @@
+# NInfer live panel — monitor only. It does not deploy, download or
+# start any inference framework. It only polls a NInfer server that is
+# already running somewhere else.
+#
+# Default wiring (most common case: NInfer published on the host at :8080):
+#   panel -> host.docker.internal:8080 -> your ninfer-unc
+# On Linux Docker this needs the extra_hosts line below (host-gateway).
+# If NInfer runs in another container on the same user network, set
+# NINFER_BASE_URL=http://ninfer-unc:8080 instead (see README).
+#
+# Ports: the panel itself is published loopback-only on the host
+# (127.0.0.1:8091). 8091 is deliberate: 8080 is NInfer, 8090 is already
+# used by your nv-power-fan panel, 8787 was the Strata manager panel.
+# Do not change it to 0.0.0.0 without a TLS reverse proxy in front.
+#
+# GPU: the deploy block below is ONLY so nvidia-smi works inside the
+# container for the GPU cards. It does not run inference. If your host
+# has no nvidia-container-toolkit, delete the deploy block — the panel
+# still runs, the GPU cards will just say nvidia-smi unavailable.
+#
+# Host memory: mounting /proc read-only lets the panel read the HOST's
+# meminfo. Without it, system memory is reported unavailable on purpose
+# (the container's own meminfo would be the wrong machine's numbers).
+
+services:
+  ninfer-panel:
+    build: .
+    image: ninfer-live-panel:latest
+    container_name: ninfer-panel
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8091:8091"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      NINFER_BASE_URL: ${NINFER_BASE_URL:-http://host.docker.internal:8080}
+      # Only if your NInfer requires an API key; leave empty otherwise.
+      NINFER_API_KEY: ${NINFER_API_KEY:-}
+      PANEL_PORT: "8091"
+      POLL_INTERVAL: "2"
+    volumes:
+      # Optional but recommended for true host memory numbers.
+      - /proc:/host/proc:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

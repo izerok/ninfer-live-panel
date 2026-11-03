@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>监控 · NInfer</title>
+<!--
+  本页按 Niko1221/Strata apps/host 的 Monitor 屏 1:1 复刻版式（MIT 许可），
+  数据源换成本地 NInfer。版式、卡片顺序、文案均照 Strata 的来：
+  模型状态卡（五态 badges + 模型进度条）→ 8 张指标卡（4 列）→
+  上下文占用 + 最近请求 → 对话缓存。
+  Strata 有而 NInfer 不提供的字段不造数：单请求进度（条形为进行中动画）、
+  历史请求（表为空态）、专家缓存（改用 KV 缓存）、PCIe 传输速率（只给链路）。
+  完整适配清单见 README。
+-->
+<style>
+  :root{
+    --st-bg:#101418; --st-surface:#1a1f26; --st-surface-2:#222833;
+    --st-line:rgba(255,255,255,.14); --st-ink:#e6e8eb; --st-ink-muted:#9aa0a6;
+    --st-accent:#10b981; --st-accent-tint:rgba(16,185,129,.16); --st-accent-text:#34d399;
+    --st-info:#38bdf8; --st-info-tint:rgba(56,189,248,.16); --st-info-text:#7dd3fc;
+    --st-warn:#f59e0b; --st-warn-tint:rgba(245,158,11,.16); --st-warn-text:#fbbf24;
+    --st-danger:#f87171; --st-danger-tint:rgba(248,113,113,.16); --st-danger-text:#fca5a5;
+  }
+  *{box-sizing:border-box}
+  body{font-family:system-ui,-apple-system,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--st-bg);color:var(--st-ink);margin:0;padding:24px;max-width:1280px;margin-left:auto;margin-right:auto}
+  h1{font-size:24px;margin:0 0 4px}
+  h2{font-size:16px;margin:0}
+  .muted{color:var(--st-ink-muted)} .small{font-size:12px} .xs{font-size:10px}
+  .title-detail{color:var(--st-ink-muted);font-size:14px;margin-bottom:20px}
+  .stack{display:flex;flex-direction:column;gap:16px}
+  .st-card{background:var(--st-surface);border:1px solid var(--st-line);border-radius:20px;padding:20px;box-shadow:none}
+  /* 模型状态卡：Strata monitor-state */
+  .monitor-state{display:flex;flex-direction:column;gap:14px}
+  .monitor-state__head{display:flex;align-items:center;flex-wrap:wrap;gap:12px 18px}
+  .monitor-state__badges{display:flex;flex-wrap:wrap;gap:7px}
+  .st-badge{display:inline-flex;align-items:center;height:24px;padding:0 10px;border-radius:999px;font-size:12px;font-weight:600;border:1px solid var(--st-line);opacity:.38}
+  .st-badge[data-active="true"]{opacity:1}
+  .st-badge[data-phase="reading"]{background:var(--st-info-tint);color:var(--st-info-text);border-color:transparent}
+  .st-badge[data-phase="generating"], .st-badge[data-phase="idle"][data-active="true"]{background:var(--st-accent-tint);color:var(--st-accent-text);border-color:transparent}
+  .st-badge[data-phase="queued"]{background:var(--st-warn-tint);color:var(--st-warn-text);border-color:transparent}
+  .st-badge[data-phase="error"]{background:var(--st-danger-tint);color:var(--st-danger-text);border-color:transparent}
+  .monitor-state__reading{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px 18px}
+  .num{font-variant-numeric:tabular-nums}
+  .st-progress{height:8px;border-radius:999px;background:rgba(255,255,255,.12);overflow:hidden}
+  .st-progress > div{height:100%;background:var(--st-accent);border-radius:999px}
+  .st-progress > div.info{background:var(--st-info)}
+  .st-progress > div.indet{width:40%;animation:indet 1.4s ease-in-out infinite}
+  @keyframes indet{0%{margin-left:0}50%{margin-left:60%}100%{margin-left:0}}
+  .bar-label{display:flex;justify-content:space-between;font-size:12px;color:var(--st-ink-muted);margin-bottom:6px}
+  /* 指标卡：Strata monitor-metrics / monitor-metric */
+  .monitor-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}
+  .monitor-metric{min-width:0;min-height:172px;padding:18px 20px;display:flex;flex-direction:column;gap:16px}
+  .st-metric__label{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:12px}
+  .monitor-metric__source{margin-left:auto;color:var(--st-ink-muted);font-size:10px;font-weight:400}
+  .st-metric__value{font-size:clamp(22px,2.3vw,32px);font-weight:700;overflow-wrap:anywhere}
+  .st-metric__unit{font-size:12px;white-space:nowrap;font-weight:400}
+  .monitor-metric__sub{margin-top:10px;min-height:16px;line-height:1.45;overflow-wrap:anywhere;font-size:12px;color:var(--st-ink-muted)}
+  .monitor-speed-values{display:flex;justify-content:space-between;gap:10px}
+  .monitor-speed-values > div{min-width:0}
+  .monitor-speed-values > div:last-child{text-align:right}
+  .monitor-speed-values .st-metric__value{font-size:clamp(20px,2vw,28px)}
+  .monitor-spark{margin-top:auto;height:32px;flex:none}
+  .monitor-spark svg{display:block;width:100%;height:32px;overflow:visible}
+  /* 上下文 + 最近请求：Strata monitor-context-requests */
+  .monitor-context-requests{display:grid;grid-template-columns:minmax(250px,1fr) minmax(0,2.4fr);gap:16px;align-items:stretch}
+  .monitor-context{display:flex;flex-direction:column;gap:8px}
+  .monitor-context__gauge{align-self:center;margin:10px auto 16px;text-align:center;position:relative;width:150px;height:150px}
+  .monitor-context__gauge .gauge-center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .monitor-context__gauge .gauge-center b{font-size:28px}
+  .monitor-bar-reading{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-top:8px}
+  .monitor-bar-reading > span:last-child{text-align:right}
+  .monitor-requests{min-width:0;display:flex;flex-direction:column;gap:14px}
+  .monitor-request-table{overflow:auto}
+  .st-table{width:100%;min-width:630px;font-size:12px;border-collapse:collapse}
+  .st-table th{font-size:10px;font-weight:500;letter-spacing:.03em;white-space:nowrap;padding:10px 8px;text-align:left;color:var(--st-ink-muted);border-bottom:1px solid var(--st-line)}
+  .st-table td{padding:12px 8px;white-space:nowrap;border-bottom:1px solid rgba(255,255,255,.06)}
+  .st-table .num{text-align:right}
+  .monitor-cache{display:flex;flex-direction:column;gap:16px}
+  .monitor-cache-bars{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+  .monitor-cache-facts{display:grid;grid-template-columns:1fr 1fr;gap:16px 24px;margin:0}
+  .monitor-cache-facts > div{display:flex;justify-content:space-between;gap:16px;font-size:12px}
+  .monitor-cache-facts dt{color:var(--st-ink-muted)}
+  .monitor-cache-facts dd{margin:0;text-align:right}
+  .warn{border:1px solid var(--st-danger);border-radius:12px;padding:12px;margin-bottom:16px;font-size:13px}
+  @media(max-width:1100px){.monitor-metric{padding:16px}.monitor-metric__source{flex-basis:100%;margin:0}}
+  @media(max-width:950px){.monitor-context-requests{grid-template-columns:1fr}}
+  @media(max-width:767px){.monitor-metrics{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.monitor-cache-bars,.monitor-cache-facts{display:flex;flex-direction:column}}
+</style>
+</head>
+<body>
+<div class="stack monitor-dashboard">
+  <header>
+    <h1>监控</h1>
+    <div class="title-detail" id="titleDetail">未加载模型</div>
+  </header>
+
+  <div id="err" class="warn" style="display:none"></div>
+
+  <!-- 模型状态卡 -->
+  <section class="st-card monitor-state" aria-label="模型状态">
+    <div class="monitor-state__head">
+      <h2>模型状态</h2>
+      <div class="monitor-state__badges" id="badges">
+        <span class="st-badge" data-phase="idle" data-active="false">空闲</span>
+        <span class="st-badge" data-phase="reading" data-active="false">正在读取</span>
+        <span class="st-badge" data-phase="generating" data-active="false">正在生成</span>
+        <span class="st-badge" data-phase="queued" data-active="false">排队中</span>
+        <span class="st-badge" data-phase="error" data-active="false">错误</span>
+      </div>
+    </div>
+    <div class="monitor-state__reading small">
+      <span id="phaseText">等待引擎遥测…</span>
+      <span class="muted num" id="statusDetail"></span>
+    </div>
+    <div>
+      <div class="bar-label"><span>模型进度</span><span id="progressNote" class="muted"></span></div>
+      <div class="st-progress"><div id="progressBar" style="width:0%"></div></div>
+    </div>
+  </section>
+
+  <!-- 8 张指标卡，顺序与 Strata 一致 -->
+  <div class="monitor-metrics">
+    <section class="st-card monitor-metric" aria-label="速度">
+      <div class="st-metric__label">速度<span class="monitor-metric__source" id="speedSource">不可用</span></div>
+      <div class="monitor-speed-values">
+        <div><div class="st-metric__value"><span id="decode">—</span><span class="st-metric__unit"> t/s</span></div><div class="monitor-metric__sub" id="decodeSub">解码</div></div>
+        <div><div class="st-metric__value"><span id="prefill">—</span><span class="st-metric__unit"> t/s</span></div><div class="monitor-metric__sub" id="prefillSub">预填充</div></div>
+      </div>
+      <div class="monitor-spark" id="speedSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="GPU 负载">
+      <div class="st-metric__label">GPU 负载<span class="monitor-metric__source" id="gpuLoadSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="gpuLoad">—</span><span class="st-metric__unit"> %</span></div><div class="monitor-metric__sub" id="gpuLoadSub">—</div></div>
+      <div class="monitor-spark" id="gpuLoadSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="显存">
+      <div class="st-metric__label">显存<span class="monitor-metric__source" id="vramSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="vram">—</span><span class="st-metric__unit" id="vramUnit"> GB</span></div><div class="monitor-metric__sub" id="vramSub">—</div></div>
+      <div class="monitor-spark" id="vramSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="GPU 温度">
+      <div class="st-metric__label">GPU 温度<span class="monitor-metric__source" id="tempSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="temp">—</span><span class="st-metric__unit"> °C</span></div><div class="monitor-metric__sub" id="tempSub">—</div></div>
+      <div class="monitor-spark" id="tempSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="功率">
+      <div class="st-metric__label">功率<span class="monitor-metric__source" id="powerSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="power">—</span><span class="st-metric__unit"> W</span></div><div class="monitor-metric__sub" id="powerSub">—</div></div>
+      <div class="monitor-spark" id="powerSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="PCIe">
+      <div class="st-metric__label">PCIe<span class="monitor-metric__source" id="pcieSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="pcie">—</span><span class="st-metric__unit" id="pcieUnit"></span></div><div class="monitor-metric__sub" id="pcieSub">传输到 GPU 不可用</div></div>
+      <div class="monitor-spark" id="pcieSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="CPU">
+      <div class="st-metric__label">CPU<span class="monitor-metric__source" id="cpuSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="cpu">—</span><span class="st-metric__unit"> %</span></div><div class="monitor-metric__sub" id="cpuSub">—</div></div>
+      <div class="monitor-spark" id="cpuSpark"></div>
+    </section>
+    <section class="st-card monitor-metric" aria-label="磁盘读取">
+      <div class="st-metric__label">磁盘读取<span class="monitor-metric__source" id="diskSource">不可用</span></div>
+      <div><div class="st-metric__value"><span id="disk">—</span><span class="st-metric__unit" id="diskUnit"></span></div><div class="monitor-metric__sub" id="diskSub">读取吞吐</div></div>
+      <div class="monitor-spark" id="diskSpark"></div>
+    </section>
+  </div>
+
+  <!-- 上下文占用 + 最近请求 -->
+  <div class="monitor-context-requests">
+    <section class="st-card monitor-context">
+      <h2>上下文占用</h2>
+      <div class="monitor-context__gauge">
+        <svg viewBox="0 0 120 120" width="150" height="150" style="transform:rotate(135deg)">
+          <circle cx="60" cy="60" r="50" fill="none" stroke="rgba(255,255,255,.12)" stroke-width="10" stroke-dasharray="235.6 314.2"/>
+          <circle id="gaugeArc" cx="60" cy="60" r="50" fill="none" stroke="#10b981" stroke-width="10" stroke-dasharray="0 314.2" stroke-linecap="round"/>
+        </svg>
+        <div class="gauge-center"><b id="gaugePct">—</b><span class="small muted" id="gaugeSub">—</span></div>
+      </div>
+      <div class="monitor-bar-reading"><span>KV 缓存</span><span class="muted num" id="kvBarText">—</span></div>
+      <div class="st-progress"><div id="kvBar" style="width:0%"></div></div>
+      <div class="monitor-bar-reading"><span>系统内存</span><span class="muted num" id="ramBarText">—</span></div>
+      <div class="st-progress"><div id="ramBar" style="width:0%"></div></div>
+      <div class="monitor-bar-reading"><span>GPU 温度</span><span class="muted num" id="tempBarText">—</span></div>
+      <div class="st-progress"><div id="tempBar" class="info" style="width:0%"></div></div>
+      <p class="small muted" style="margin:8px 0 0">上下文占用取处理中请求的最长 prompt / 窗口上限；无进行中请求时为 0。KV 缓存一栏是 NInfer 的对应项，Strata 原栏为“显存中的专家”。</p>
+    </section>
+    <section class="st-card monitor-requests">
+      <h2>最近请求</h2>
+      <div class="monitor-request-table">
+        <table class="st-table"><thead><tr><th>时间</th><th>状态</th><th class="num">Prompt</th><th class="num">复用</th><th class="num">输出</th><th class="num">Tok/s</th><th class="num">显存命中率</th><th class="num">时长</th></tr></thead>
+        <tbody><tr><td colspan="8" class="muted">暂无请求记录</td></tr></tbody></table>
+      </div>
+      <p class="small muted" style="margin:auto 0 0;padding-top:10px" id="requestTotals">NInfer 不提供历史请求接口，/slots 只给当前处理中请求，因此本表保持空态，不把当前请求伪装成历史记录。</p>
+    </section>
+  </div>
+
+  <!-- 对话缓存：Strata 原栏，NInfer 以上下文缓存对应 -->
+  <section class="st-card monitor-cache">
+    <h2>对话缓存</h2>
+    <div class="monitor-cache-bars">
+      <div><div class="monitor-bar-reading"><span>保留的会话</span><span class="muted num" id="parkedText">—</span></div><div class="st-progress"><div id="parkedBar" style="width:0%"></div></div></div>
+      <div><div class="monitor-bar-reading"><span>他们的内存（宿主 KV）</span><span class="muted num" id="cacheMemText">—</span></div><div class="st-progress"><div id="cacheMemBar" style="width:0%"></div></div></div>
+    </div>
+    <dl class="monitor-cache-facts">
+      <div><dt>上次请求</dt><dd id="lastCacheText">复用未报告</dd></div>
+      <div><dt>自启动以来复用</dt><dd id="reusedTotalText">—</dd></div>
+    </dl>
+    <p class="small muted">保留的 slot 可从已保存状态恢复。NInfer 的上下文缓存细节见上下文占用一栏；本栏的“保留的会话”即 /slots 的 retained slot 数。</p>
+  </section>
+
+  <p class="small muted">本页按 Strata host Monitor 的版式复刻，数据源是本地 NInfer（只 GET /health、/v1/load、/stats、/metrics、/slots，不发任何生成、加载、卸载请求，不部署任何推理框架）。NInfer 状态映射到 Strata 五态：空闲→空闲，预填充中→正在读取，生成中→正在生成，排队→排队中，离线→错误。单请求进度、历史请求、专家缓存、PCIe 传输速率是 Strata 有而 NInfer 不提供的字段，本页不造数，完整适配清单见 README。</p>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const has = v => v!==null && v!==undefined && isFinite(v);
+const fmt = (v, d=1) => has(v) ? Number(v).toFixed(d) : '—';
+const H = {decode:[],prefill:[],gpu:[],vram:[],temp:[],power:[],cpu:[],disk:[]};
+function push(k,v){ H[k].push(v??null); if(H[k].length>30) H[k].shift(); }
+// Strata ReferenceSpark：100×32，面积 12% + 1.6px 线，空数据画虚线基线
+function spark(values, color, secondary){
+  const all=[...values, ...(secondary||[])].filter(v=>v!==null);
+  if(!all.length) return '<svg viewBox="0 0 100 32" preserveAspectRatio="none"><path d="M0,28 L100,28" fill="none" stroke="rgba(255,255,255,.25)" stroke-dasharray="3 3" stroke-width="1"/></svg>';
+  const max=Math.max(...all,1);
+  const path=(vals)=>{
+    let p='', started=false;
+    vals.forEach((v,i)=>{
+      if(v===null){ started=false; return; }
+      const x=(i/(vals.length-1||1))*100, y=30-(v/max)*26;
+      p+=(started?'L':'M')+x.toFixed(2)+' '+y.toFixed(2)+' '; started=true;
+    });
+    return p;
+  };
+  const line=path(values);
+  const area=line+`L100 32L0 32Z`;
+  let out=`<svg viewBox="0 0 100 32" preserveAspectRatio="none"><path d="${area}" fill="${color}" opacity=".12"/><path d="${line}" fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>`;
+  if(secondary){
+    const l2=path(secondary);
+    out+=`<path d="${l2}L100 32L0 32Z" fill="#0a7a55" opacity=".12"/><path d="${l2}" fill="none" stroke="#0a7a55" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }
+  return out+'</svg>';
+}
+const PHASE = {idle:'idle', reading:'reading', generating:'generating', queued:'queued', error:'error'};
+function ninferToStrata(s){
+  if(!s.ninfer_ok) return 'error';
+  if(s.state==='warming') return 'reading';
+  if(s.state==='generating') return 'generating';
+  if(s.state==='queued') return 'queued';
+  return 'idle';
+}
+async function tick(){
+  let s;
+  try{ s=await (await fetch('/api/snapshot')).json(); }catch(e){ s={ninfer_ok:false,state:'offline',error:String(e)}; }
+  const phase = ninferToStrata(s);
+  document.querySelectorAll('#badges .st-badge').forEach(b=>{
+    const active = b.dataset.phase===phase || (b.dataset.phase==='queued' && (s.requests?.waiting||0)>0);
+    b.dataset.active = active ? 'true' : 'false';
+    if(b.dataset.phase==='queued' && (s.requests?.waiting||0)>0) b.textContent='排队中 ('+s.requests.waiting+')';
+    else if(b.dataset.phase==='queued') b.textContent='排队中';
+  });
+  $('titleDetail').textContent = s.model || '未加载模型';
+  const err=$('err');
+  if(!s.ninfer_ok){ err.style.display='block'; err.textContent='NInfer 不可达：'+(s.error||'未知错误')+'。面板不会替你启动它，请先确认本地 ninfer-unc 在跑、端口与 NINFER_BASE_URL 对得上。'; }
+  else err.style.display='none';
+  const r=s.requests||{}, inst=s.instant||{}, m=s.metrics||{}, ctx=s.context||{};
+  let phaseText, detail='';
+  if(phase==='idle'){ phaseText='等待请求'; }
+  else if(phase==='reading'){ phaseText='正在读取'; detail='正在预填充 · '+r.prefilling+' 个请求'; if(ctx.max_processing_prompt_tokens) detail+=' · 最长 prompt '+ctx.max_processing_prompt_tokens.toLocaleString()+' tokens'; }
+  else if(phase==='generating'){ phaseText='正在生成'; detail='正在生成 · '+fmt(inst.decode_tok_s)+' tok/s · 在跑 '+r.running+' 个'; }
+  else if(phase==='queued'){ phaseText='排队中'; detail='排队 '+r.waiting+' 个'; }
+  else { phaseText='错误'; detail=s.error||''; }
+  $('phaseText').textContent=phaseText; $('statusDetail').textContent=detail;
+  const bar=$('progressBar');
+  if(phase==='reading'||phase==='generating'){ bar.className='indet'+(phase==='reading'?' info':''); bar.style.width='40%'; $('progressNote').textContent='NInfer 不报告单请求进度'; }
+  else { bar.className=''; bar.style.width='0%'; $('progressNote').textContent=''; }
+  // 速度卡
+  $('decode').textContent=fmt(inst.decode_tok_s);
+  $('prefill').textContent=fmt(inst.prefill_tok_s);
+  $('decodeSub').textContent = phase==='generating' ? '正在解码' : '上次请求解码';
+  $('prefillSub').textContent = phase==='reading' ? '正在预填充' : (phase==='generating' ? '本次请求预填充' : '上次请求预填充');
+  $('speedSource').textContent = s.ninfer_ok ? '实测' : '不可用';
+  push('decode', inst.decode_tok_s); push('prefill', inst.prefill_tok_s);
+  $('speedSpark').innerHTML = spark(H.decode, '#10b981', H.prefill);
+  // GPU 卡
+  const g=(s.gpu&&s.gpu.available)?s.gpu.cards[0]:null;
+  $('gpuLoad').textContent=g?fmt(g.util_percent,0):'—';
+  $('gpuLoadSub').textContent=g?g.name:'不可用';
+  $('gpuLoadSource').textContent=g?'实测':'不可用';
+  $('vram').textContent=g?fmt(g.mem_used_mb/1024,1):'—';
+  $('vramUnit').textContent=g?(' / '+fmt(g.mem_total_mb/1024,0)+' GB'):' GB';
+  $('vramSub').textContent=g?g.name:'不可用';
+  $('vramSource').textContent=g?'实测':'不可用';
+  $('temp').textContent=g?fmt(g.temp_c,0):'—';
+  $('tempSub').textContent=g?g.name:'不可用';
+  $('tempSource').textContent=g?'实测':'不可用';
+  $('power').textContent=g?fmt(g.power_w,0):'—';
+  $('powerSub').textContent=g?(has(g.power_limit_w)?('上限 '+fmt(g.power_limit_w,0)+' W'):'GPU 功率'): '不可用';
+  $('powerSource').textContent=g?'实测':'不可用';
+  $('pcie').textContent=g&&has(g.pcie_gen)?('Gen'+fmt(g.pcie_gen,0)):'—';
+  $('pcieUnit').textContent=g&&has(g.pcie_width)?('x'+fmt(g.pcie_width,0)):'';
+  $('pcieSub').textContent=g?(has(g.pcie_gen)?'当前链路 · 传输速率未报告':'传输到 GPU 不可用'):'传输到 GPU 不可用';
+  $('pcieSource').textContent=g&&has(g.pcie_gen)?'实测':'不可用';
+  push('gpu', g?g.util_percent:null); push('vram', g?g.mem_used_mb/1024:null); push('temp', g?g.temp_c:null); push('power', g?g.power_w:null);
+  $('gpuLoadSpark').innerHTML=spark(H.gpu,'#10b981');
+  $('vramSpark').innerHTML=spark(H.vram,'#10b981');
+  $('tempSpark').innerHTML=spark(H.temp,'#f59e0b');
+  $('powerSpark').innerHTML=spark(H.power,'#10b981');
+  $('pcieSpark').innerHTML=spark([null],'#38bdf8');
+  // CPU 卡
+  const cpu=s.host_cpu||{};
+  $('cpu').textContent=(cpu.available&&has(cpu.util_percent))?fmt(cpu.util_percent,0):'—';
+  $('cpuSub').textContent=cpu.available?(cpu.model?cpu.model+ (cpu.cores?' · '+cpu.cores+' 核':''):'宿主 CPU'):'不可用：'+(cpu.reason||'未知');
+  $('cpuSource').textContent=cpu.available?'实测':'不可用';
+  push('cpu', cpu.available?cpu.util_percent:null);
+  $('cpuSpark').innerHTML=spark(H.cpu,'#10b981');
+  // 磁盘读取卡
+  const disk=s.host_disk||{};
+  const readMbs=disk.available?disk.read_mbs:null, writeMbs=disk.available?disk.write_mbs:null;
+  $('disk').textContent=has(readMbs)?(readMbs>=1024?fmt(readMbs/1024,1):fmt(readMbs,1)):'—';
+  $('diskUnit').textContent=has(readMbs)?(readMbs>=1024?'GB/s':'MB/s'):'';
+  $('diskSub').textContent=has(writeMbs)?('写入 '+fmt(writeMbs,1)+' MB/s'):(disk.available?'读取吞吐':'不可用：'+(disk.reason||'未知'));
+  $('diskSource').textContent=disk.available?'实测':'不可用';
+  push('disk', readMbs);
+  $('diskSpark').innerHTML=spark(H.disk,'#38bdf8');
+  // 上下文占用表
+  const pct = ctx.max_prompt_share_percent;
+  $('gaugePct').textContent=has(pct)?Math.round(pct)+'%':'—';
+  $('gaugeSub').textContent=ctx.max_processing_prompt_tokens?('最长 prompt '+ctx.max_processing_prompt_tokens.toLocaleString()+' / '+ctx.max_context.toLocaleString()):'无进行中的请求';
+  $('gaugeArc').setAttribute('stroke-dasharray', (has(pct)?(235.6*pct/100).toFixed(1):0)+' 314.2');
+  $('kvBarText').textContent=has(ctx.kv_used_percent)?(ctx.kv_tokens.toLocaleString()+' / '+ctx.kv_capacity_tokens.toLocaleString()+' tokens'):'—';
+  $('kvBar').style.width=has(ctx.kv_used_percent)?Math.min(100,ctx.kv_used_percent)+'%':'0%';
+  const hm=s.host_memory||{};
+  $('ramBarText').textContent=hm.available?((hm.used_mb/1024).toFixed(1)+' / '+(hm.total_mb/1024).toFixed(1)+' GB'):'—';
+  $('ramBar').style.width=hm.available&&has(hm.used_percent)?Math.min(100,hm.used_percent)+'%':'0%';
+  $('tempBarText').textContent=g?fmt(g.temp_c,0)+' °C':'—';
+  $('tempBar').style.width=g&&has(g.temp_c)?Math.min(100,g.temp_c/90*100)+'%':'0%';
+  // 对话缓存
+  const slots=s.slots||{};
+  $('parkedText').textContent=(slots.retained??'—')+' / '+(slots.total??'—');
+  $('parkedBar').style.width=(slots.total)?(slots.retained/slots.total*100)+'%':'0%';
+  const hkv=ctx.host_kv_bytes, hkvCap=ctx.host_kv_capacity_bytes;
+  $('cacheMemText').textContent=(hkv&&hkvCap)?((hkv/1073741824).toFixed(2)+' / '+(hkvCap/1073741824).toFixed(2)+' GB'):'—';
+  $('cacheMemBar').style.width=(hkv&&hkvCap)?Math.min(100,hkv/hkvCap*100)+'%':'0%';
+  $('lastCacheText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?('累计复用 '+s.counters.reused_prompt_tokens.toLocaleString()+' tokens'):'复用未报告';
+  $('reusedTotalText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?s.counters.reused_prompt_tokens.toLocaleString()+' tokens':'—';
+  if(m.requests_total!==undefined && m.requests_total!==null){
+    $('requestTotals').textContent='共 '+m.requests_total+' 个请求 · 解码均值 '+fmt(m.avg_decode_tok_s)+' tok/s · 预填充均值 '+fmt(m.avg_prefill_tok_s)+' tok/s · 累计复用 '+(s.counters?.reused_prompt_tokens??'—')+' tokens';
+  }
+}
+tick(); setInterval(tick, 2000);
+</script>
+</body>
+</html>
