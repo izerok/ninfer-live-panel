@@ -67,6 +67,7 @@
   .dim-btn[data-active="false"]{opacity:.55}
   .hist-legend i{display:inline-block;width:14px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
   #histCanvas{width:100%;height:240px;display:block}
+  #cumCanvas{width:100%;height:160px;display:block}
   .hist-tip{position:absolute;pointer-events:none;background:var(--st-surface-2);border:1px solid var(--st-line);border-radius:8px;padding:6px 10px;font-size:12px;display:none;white-space:nowrap}
   .hist-wrap{position:relative}
   #gaugeTrack{stroke:var(--st-track)}
@@ -98,7 +99,7 @@
   .monitor-bar-reading{display:flex;justify-content:space-between;gap:12px;font-size:12px;margin-top:8px}
   .monitor-bar-reading > span:last-child{text-align:right}
   .monitor-requests{min-width:0;display:flex;flex-direction:column;gap:14px}
-  .monitor-request-table{overflow:auto}
+  .monitor-request-table{overflow:auto;max-height:320px}
   .st-table{width:100%;min-width:630px;font-size:12px;border-collapse:collapse}
   .st-table th{font-size:10px;font-weight:500;letter-spacing:.03em;white-space:nowrap;padding:10px 8px;text-align:left;color:var(--st-ink-muted);border-bottom:1px solid var(--st-line)}
   .st-table td{padding:12px 8px;white-space:nowrap;border-bottom:1px solid var(--st-line)}
@@ -319,6 +320,9 @@
       <div class="hist-tip" id="histTip"></div>
     </div>
     <div class="small" id="histStats" style="margin-top:8px"></div>
+    <div class="small muted" style="margin-top:12px" data-i18n="cumOutTitle"></div>
+    <canvas id="cumCanvas"></canvas>
+    <div class="small" id="cumStats" style="margin-top:8px"></div>
     <p class="small muted" style="margin:10px 0 0" data-i18n="histNote"></p>
   </section>
 
@@ -424,6 +428,88 @@ async function fetchHistory(){
     if(b7) b7.style.display = (j.retention_seconds && j.retention_seconds >= 604800) ? '' : 'none';
   }catch(e){ /* 曲线缺失不影响主面板 */ }
 }
+// Cumulative decode output over time (v0.1.6): the backend records the
+// committed_decode_tokens counter in every history sample, so this is a
+// level series, not a rate. Same window as the main curve, own y-axis in
+// K/M tokens. Called from drawHistory on every path (including its early
+// returns) so it stays in sync with the range buttons and resizes.
+function drawCum(){
+  const cv = $('cumCanvas'), st = $('cumStats');
+  if(!cv || !st) return;
+  const dpr = window.devicePixelRatio || 1, w = cv.clientWidth || 800, h = 160;
+  if(cv.width !== w * dpr){ cv.width = w * dpr; cv.height = h * dpr; }
+  const ctx = cv.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const cs = getComputedStyle(document.documentElement);
+  const grid = cs.getPropertyValue('--st-line').trim() || 'rgba(128,128,128,.2)';
+  const muted = cs.getPropertyValue('--st-ink-muted').trim() || '#888';
+  ctx.clearRect(0, 0, w, h);
+  const _isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  const color = _isLight ? '#059669' : '#10b981';
+  const lastT = histSamples.length ? histSamples[histSamples.length - 1].t : Date.now() / 1000;
+  const t1 = Math.max(Date.now() / 1000, lastT);
+  const dataT0 = histSamples.length ? histSamples[0].t : t1;
+  const t0 = (lastT - dataT0 < histMinutes * 60) ? dataT0 : t1 - histMinutes * 60;
+  const pts = histSamples.filter(p => p.t >= t0 && p.out !== null && p.out !== undefined);
+  if(pts.length < 2){
+    st.textContent = '';
+    ctx.fillStyle = muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
+    ctx.fillText(T().cumNoData, w / 2, h / 2);
+    return;
+  }
+  const padL = 44, padR = 8, padT = 16, padB = 22, iw = w - padL - padR, ih = h - padT - padB;
+  const yMax = Math.max(1, ...pts.map(p => p.out)) * 1.1;
+  ctx.strokeStyle = grid; ctx.lineWidth = 1;
+  for(let i = 0; i <= 4; i++){
+    const y = padT + ih * i / 4;
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
+  }
+  const X = p => padL + (t1 > t0 ? (p.t - t0) / (t1 - t0) : 0) * iw;
+  const Y = v => padT + ih * (1 - v / yMax);
+  ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
+  // A counter reset (NInfer restart) breaks the line instead of drawing a
+  // cliff: a level series must never connect across a decrease.
+  let seg = [];
+  const flush = () => {
+    if(!seg.length) return;
+    ctx.beginPath();
+    seg.forEach((pt, i) => { if(i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y); });
+    ctx.stroke();
+    if(seg.length > 1){
+      ctx.lineTo(seg[seg.length - 1].x, padT + ih);
+      ctx.lineTo(seg[0].x, padT + ih);
+      ctx.closePath();
+      ctx.globalAlpha = 0.12; ctx.fillStyle = color; ctx.fill(); ctx.globalAlpha = 1;
+    }
+    seg = [];
+  };
+  let prev = null;
+  pts.forEach(p => {
+    if(prev !== null && p.out < prev) flush();
+    seg.push({x: X(p), y: Y(p.out)});
+    prev = p.out;
+  });
+  flush();
+  ctx.fillStyle = muted; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'right';
+  for(let i = 0; i <= 4; i++){
+    const y = padT + ih * i / 4, v = yMax * (1 - i / 4);
+    ctx.fillText(fmtTok(v), padL - 4, y - 3);
+  }
+  const fmtAxisTime = (tt) => {
+    const d = new Date(tt * 1000), span = t1 - t0;
+    if(span >= 86400) return d.toLocaleDateString([], {month:'numeric', day:'numeric'}) + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    if(span >= 3600) return d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    return d.toLocaleTimeString();
+  };
+  for(let i = 0; i <= 4; i++){
+    const tt = t0 + (t1 - t0) * i / 4, xx = padL + iw * i / 4;
+    ctx.textAlign = i === 0 ? 'left' : (i === 4 ? 'right' : 'center');
+    ctx.fillText(fmtAxisTime(tt), xx, h - 6);
+  }
+  const first = pts[0].out, last = pts[pts.length - 1].out;
+  const delta = last >= first ? last - first : null;
+  st.textContent = T().cumOut + ' ' + fmtTok(last) + (delta !== null ? ' · ' + T().cumWindow + ' ' + fmtTok(delta) : '');
+}
 function drawHistory(){
   const cv = $('histCanvas'), tip = $('histTip');
   if(!cv) return;
@@ -446,6 +532,7 @@ function drawHistory(){
     ctx.fillStyle = muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(T().histNoDims, w / 2, h / 2);
     $('histStats').textContent = '';
+    drawCum();
     return;
   }
   // Axis fits the data span when it is shorter than the selected window,
@@ -460,6 +547,7 @@ function drawHistory(){
     ctx.fillStyle = muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
     ctx.fillText(T().histCollecting, w / 2, h / 2);
     $('histStats').textContent = '';
+    drawCum();
     return;
   }
   // Legend chips show each dimension's latest value, and their dots follow
@@ -480,20 +568,17 @@ function drawHistory(){
     }
   });
   const rateMax = rateDims.length ? Math.max(1, ...pts.flatMap(p => rateDims.map(d => p[d] || 0))) * 1.1 : null;
-  const padL = 8, padR = (rateDims.length && pctDims.length) ? 44 : 8, padT = 10, padB = 22, iw = w - padL - padR, ih = h - padT - padB;
-  ctx.strokeStyle = grid; ctx.lineWidth = 1; ctx.fillStyle = muted; ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'left';
+  const padL = 44, padR = (rateDims.length && pctDims.length) ? 44 : 8, padT = 16, padB = 22, iw = w - padL - padR, ih = h - padT - padB;
+  ctx.strokeStyle = grid; ctx.lineWidth = 1;
   const leftMax = rateDims.length ? rateMax : 100;
   for(let i = 0; i <= 4; i++){
-    const y = padT + ih * i / 4, v = leftMax * (1 - i / 4);
+    const y = padT + ih * i / 4;
     ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - padR, y); ctx.stroke();
-    ctx.fillText((rateDims.length ? (v >= 100 ? Math.round(v) + '' : v.toFixed(1)) : Math.round(v) + '%'), padL, y - 3);
-    if(rateDims.length && pctDims.length){
-      ctx.textAlign = 'right';
-      ctx.fillText(Math.round(100 * (1 - i / 4)) + '%', w - 2, y - 3);
-      ctx.textAlign = 'left';
-    }
   }
-  const line = (key, color, scale) => {
+  // Percent dimensions draw lines only: on real data GPU load is a 0/100
+  // square wave, and filling it paints solid blocks that bury the tok/s
+  // lines. Rate dimensions keep the fill.
+  const line = (key, color, scale, fill) => {
     ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
     let seg = [];
     const flush = () => {
@@ -501,7 +586,7 @@ function drawHistory(){
       ctx.beginPath();
       seg.forEach((pt, i) => { if(i) ctx.lineTo(pt.x, pt.y); else ctx.moveTo(pt.x, pt.y); });
       ctx.stroke();
-      if(seg.length > 1){
+      if(fill && seg.length > 1){
         ctx.lineTo(seg[seg.length - 1].x, padT + ih);
         ctx.lineTo(seg[0].x, padT + ih);
         ctx.closePath();
@@ -517,7 +602,7 @@ function drawHistory(){
     });
     flush();
   };
-  histDims.forEach(d => { if(DIMS[d]) line(d, DIMS[d].color, DIMS[d].rate ? rateMax : 100); });
+  histDims.forEach(d => { if(DIMS[d]) line(d, DIMS[d].color, DIMS[d].rate ? rateMax : 100, DIMS[d].rate); });
   ctx.fillStyle = muted; ctx.font = '11px system-ui, sans-serif';
   const fmtAxisTime = (tt) => {
     const d = new Date(tt * 1000), span = t1 - t0;
@@ -558,6 +643,18 @@ function drawHistory(){
     _histMarkers.push({x: mx, text: new Date(e.t * 1000).toLocaleTimeString() + ' ' +
       stateLabel(e.from) + ' → ' + stateLabel(e.to) + (e.error ? ' · ' + e.error.slice(0, 100) : '')});
   });
+  // Y-axis labels last, so fills and markers never wash them out (on real
+  // data the old order left the top label clipped and the rest under fills).
+  ctx.fillStyle = muted; ctx.font = '11px system-ui, sans-serif';
+  for(let i = 0; i <= 4; i++){
+    const y = padT + ih * i / 4, v = leftMax * (1 - i / 4);
+    ctx.textAlign = 'right';
+    ctx.fillText((rateDims.length ? (v >= 100 ? Math.round(v) + '' : v.toFixed(1)) : Math.round(v) + '%'), padL - 4, y - 3);
+    if(rateDims.length && pctDims.length){
+      ctx.fillText(Math.round(100 * (1 - i / 4)) + '%', w - 2, y - 3);
+    }
+  }
+  drawCum();
   cv.onmousemove = (ev) => {
     const rect = cv.getBoundingClientRect();
     const x = ev.clientX - rect.left;
@@ -954,10 +1051,10 @@ $('exportHistBtn').addEventListener('click', () => {
   const lastT = histSamples.length ? histSamples[histSamples.length - 1].t : Date.now() / 1000;
   const t1 = Math.max(Date.now() / 1000, lastT);
   const t0 = t1 - histMinutes * 60;
-  const header = ['time', ...histDims.map(d => ({decode:'decode_tok_s', prefill:'prefill_tok_s', kv:'kv_pct', gpu:'gpu_pct'}[d]))].join(',');
+  const header = ['time', ...histDims.map(d => ({decode:'decode_tok_s', prefill:'prefill_tok_s', kv:'kv_pct', gpu:'gpu_pct'}[d])), 'cum_decode_tokens'].join(',');
   const lines = [header];
   histSamples.filter(p => p.t >= t0).forEach(p => {
-    lines.push([new Date(p.t * 1000).toISOString(), ...histDims.map(d => (p[d] === null || p[d] === undefined) ? '' : p[d])].join(','));
+    lines.push([new Date(p.t * 1000).toISOString(), ...histDims.map(d => (p[d] === null || p[d] === undefined) ? '' : p[d]), (p.out === null || p.out === undefined) ? '' : p.out].join(','));
   });
   const blob = new Blob([lines.join('\n')], {type: 'text/csv'});
   const a = document.createElement('a');
