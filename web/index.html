@@ -282,11 +282,11 @@
     <section class="st-card monitor-requests">
       <h2 data-i18n="currentReq"></h2>
       <div class="monitor-request-table">
-        <table class="st-table"><thead><tr><th data-i18n="slot"></th><th class="num" data-i18n="prompt"></th><th class="num" data-i18n="cached"></th><th class="num" data-i18n="ctxWindow"></th><th class="num" data-i18n="shareWindow"></th><th class="num" data-i18n="reqAvgDecode"></th><th class="num" data-i18n="reqProcTime"></th><th data-i18n="reqStatus"></th></tr></thead>
-        <tbody id="currentReqBody"><tr><td colspan="8" class="muted">—</td></tr></tbody></table>
+        <table class="st-table"><thead><tr><th data-i18n="slot"></th><th class="num" data-i18n="prompt"></th><th class="num" data-i18n="outCol"></th><th class="num" data-i18n="cached"></th><th class="num" data-i18n="ctxWindow"></th><th class="num" data-i18n="shareWindow"></th><th class="num" data-i18n="reqAvgDecode"></th><th class="num" data-i18n="reqProcTime"></th><th data-i18n="reqStatus"></th></tr></thead>
+        <tbody id="currentReqBody"><tr><td colspan="9" class="muted">—</td></tr></tbody></table>
       </div>
       <p class="small muted" style="margin:auto 0 0;padding-top:10px" id="requestTotals" data-i18n="currentNote"></p>
-      <p class="small muted" style="margin:0" data-i18n="reqHistoryNote"></p>
+      <p class="small muted" style="margin:0" id="reqHistoryNote" data-i18n="reqHistoryNote"></p>
     </section>
   </div>
 
@@ -301,6 +301,7 @@
       <div><dt data-i18n="lastReq"></dt><dd id="lastCacheText">—</dd></div>
       <div><dt data-i18n="reusedSince"></dt><dd id="reusedTotalText">—</dd></div>
     </dl>
+    <div id="cacheExtra" class="small muted" style="display:none"></div>
     <p class="small muted" data-i18n="cacheNote"></p>
   </section>
 
@@ -313,6 +314,7 @@
         <button type="button" class="dim-btn" data-dim="prefill" data-active="true"><i style="background:#38bdf8"></i><span data-i18n="legendPrefill"></span></button>
         <button type="button" class="dim-btn" data-dim="kv" data-active="false"><i style="background:#f59e0b"></i><span data-i18n="legendKv"></span></button>
         <button type="button" class="dim-btn" data-dim="gpu" data-active="false"><i style="background:#a78bfa"></i><span data-i18n="legendGpu"></span></button>
+        <button type="button" class="dim-btn" data-dim="accept" data-active="false"><i style="background:#fb7185"></i><span data-i18n="legendAccept"></span></button>
         <button type="button" class="dim-btn" data-dim="cum" data-active="true"><i style="background:#10b981"></i><span data-i18n="legendCum"></span></button>
       </div>
       <div class="range" id="histRange">
@@ -417,7 +419,7 @@ let _histMarkers = []; // {x, color, text} for events inside the drawn window
 let histDims = (() => {
   try{
     const saved = JSON.parse(localStorage.getItem('ninfer-panel-hist-dims') || 'null');
-    if(Array.isArray(saved) && saved.length && saved.every(d => ['decode','prefill','kv','gpu','cum'].includes(d))) return saved;
+    if(Array.isArray(saved) && saved.length && saved.every(d => ['decode','prefill','kv','gpu','cum','accept'].includes(d))) return saved;
   }catch(e){ /* fall through to default */ }
   return ['decode', 'prefill', 'cum'];
 })();
@@ -461,11 +463,12 @@ async function fetchHistory(){
 // is dashed, so series are never distinguished by hue alone (ui-ux-pro-max
 // chart guidance: distinct line styles plus direct labels, not color alone).
 const HIST_DIMS = {
-  decode:{field:'decode', labelKey:'histTipDecode', fill:true, dash:false},
-  prefill:{field:'prefill', labelKey:'histTipPrefill', fill:true, dash:true},
-  kv:{field:'kv', labelKey:'histTipKv', fill:false, dash:false},
-  gpu:{field:'gpu', labelKey:'histTipGpu', fill:false, dash:true},
-  cum:{field:'out', labelKey:'histTipCum', fill:true, dash:false},
+  decode:{field:'decode', labelKey:'histTipDecode', fill:true, dash:null},
+  prefill:{field:'prefill', labelKey:'histTipPrefill', fill:true, dash:[6,4]},
+  kv:{field:'kv', labelKey:'histTipKv', fill:false, dash:null},
+  gpu:{field:'gpu', labelKey:'histTipGpu', fill:false, dash:[6,4]},
+  accept:{field:'accept', labelKey:'histTipAccept', fill:false, dash:[2,3]},
+  cum:{field:'out', labelKey:'histTipCum', fill:true, dash:null},
 };
 function histDimColor(d){
   const light = document.documentElement.getAttribute('data-theme') === 'light';
@@ -473,12 +476,13 @@ function histDimColor(d){
     prefill: light ? '#0284c7' : '#38bdf8',
     kv: light ? '#d97706' : '#f59e0b',
     gpu: light ? '#7c3aed' : '#a78bfa',
-    cum: light ? '#059669' : '#10b981'}[d];
+    cum: light ? '#059669' : '#10b981',
+    accept: light ? '#e11d48' : '#fb7185'}[d];
 }
 function histDimFmt(d, v){
   if(d === 'decode') return fmtRateNum(v) + ' tok/s';
   if(d === 'prefill') return fmtRateRaw(v) + ' tok/s';
-  if(d === 'kv' || d === 'gpu') return fmtPct1(v);
+  if(d === 'kv' || d === 'gpu' || d === 'accept') return fmtPct1(v);
   return fmtTok(v);
 }
 const HIST_PANELS = [
@@ -487,7 +491,7 @@ const HIST_PANELS = [
    emptyMsgKey:'histCollecting',
    yMaxOf: pts => Math.max(1, ...pts.flatMap(p => ['decode','prefill'].map(d => p[d] || 0))) * 1.1,
    yFmt: v => v >= 100 ? Math.round(v) + '' : v.toFixed(1)},
-  {id:'util', dims:['kv','gpu'], height:160, statsEl:'histStatsUtil',
+  {id:'util', dims:['kv','gpu','accept'], height:160, statsEl:'histStatsUtil',
    canvas:'histCanvasUtil', tip:'histTipUtil', wrap:'histPanelUtil',
    emptyMsgKey:'histCollecting',
    yMaxOf: () => 100,
@@ -529,7 +533,7 @@ function drawHistPanel(cfg, pts, t0, t1, showX, statsText){
   cfg.dims.forEach(d => {
     const D = HIST_DIMS[d], color = histDimColor(d);
     ctx.strokeStyle = color; ctx.lineWidth = 2.5; ctx.lineJoin = 'round';
-    ctx.setLineDash(D.dash ? [6, 4] : []);
+    ctx.setLineDash(D.dash || []);
     let seg = [];
     const flush = () => {
       if(!seg.length) return;
@@ -630,7 +634,7 @@ function drawHistory(){
       const v = pts[i][HIST_DIMS[d].field];
       if(v === null || v === undefined) continue;
       const base = span.textContent.split(' · ')[0];
-      span.textContent = base + ' · ' + (d === 'cum' ? fmtTok(v) : Number(v).toFixed(1) + ((d === 'kv' || d === 'gpu') ? '%' : ''));
+      span.textContent = base + ' · ' + (d === 'cum' ? fmtTok(v) : Number(v).toFixed(1) + ((d === 'kv' || d === 'gpu' || d === 'accept') ? '%' : ''));
       break;
     }
   });
@@ -695,6 +699,7 @@ function drawHistory(){
       const parts = [];
       if(histDims.includes('kv')){ const a = _avg('kv'); if(a !== null) parts.push(T().histTipKv + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
       if(histDims.includes('gpu')){ const a = _avg('gpu'); if(a !== null) parts.push(T().histTipGpu + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
+      if(histDims.includes('accept')){ const a = _avg('accept'); if(a !== null) parts.push(T().histTipAccept + ' ' + T().statAvg + ' ' + fmtPct1(a)); }
       statsText = parts.join(' · ');
     } else if(cfg.id === 'cum'){
       const outs = panelPts.map(p => p.out).filter(v => v !== null && v !== undefined);
@@ -780,9 +785,11 @@ function ninferToStrata(s){
   return 'idle';
 }
 // 当前请求表（含过去 1 小时观测记录）：当前行来自快照（2 秒刷新），
-// 过去行来自 /api/request-history（10 秒节流，与事件同口径）。过去行置灰，
+// 过去行来自 /api/request-history（10 秒节流，与事件同口径）：默认是面板的
+// /slots 观测记录；配了请求日志（PANEL_REQUEST_LOG）时优先用日志里的真实
+// 完成记录（含输出 token 与单请求速度）。过去行置灰，
 // 状态只用可观测的两种：进行中 / 已结束（结束原因 NInfer 未报告，不写已完成）。
-let _lastSnap = null, _pastReqs = [], _pastEndedCount = null, _lastMaxCtx = 0, _activeFirst = {}, _tableHist = [];
+let _lastSnap = null, _pastReqs = [], _pastEndedCount = null, _lastMaxCtx = 0, _activeFirst = {}, _tableHist = [], _logReqs = [];
 // Window average for the requests table: the panel-wide average decode
 // rate over a request's window, from a 60-minute history fetch (throttled
 // with the request-history fetch). Not the request's own speed — NInfer
@@ -792,40 +799,78 @@ function _avgDecodeWindow(first, last){
   if(!ss.length) return null;
   return ss.reduce((a, p) => a + p.decode, 0) / ss.length;
 }
-function _reqRowHtml(d, past){
-  const share = _lastMaxCtx ? (d.prompt_tokens / _lastMaxCtx * 100) : null;
-  const status = past ? T().reqEnded.replace('{t}', new Date(d.last * 1000).toLocaleTimeString()) : T().reqActive;
-  // Duration comes from the panel's own observation records (first/last),
-  // not from NInfer: /slots reports no per-request timestamps.
-  const end = past ? d.last : Date.now() / 1000;
-  const dur = (d.first !== null && d.first !== undefined && end >= d.first) ? fmtDuration(end - d.first) : '—';
-  // Average decode speed is the panel-wide average rate over the request's
-  // window, not the request's own speed: NInfer reports no per-request
-  // generated-token counts, so a per-request speed cannot be computed
-  // without inventing numbers.
-  const avg = (d.first !== null && d.first !== undefined) ? _avgDecodeWindow(d.first, end) : null;
-  return '<tr' + (past ? ' class="req-past"' : '') + '><td>#' + d.id + '</td><td class="num" title="' + d.prompt_tokens.toLocaleString() + '">' + fmtTok(d.prompt_tokens) +
-    '</td><td class="num" title="' + d.cached_tokens.toLocaleString() + '">' + fmtTok(d.cached_tokens) + (d.prompt_tokens ? ' · ' + (d.cached_tokens / d.prompt_tokens * 100).toFixed(1) + '%' : '') +
+function _reqRowHtml(d, past, fromLog){
+  // Two past-row sources. Observation rows (default): duration and the
+  // window-average decode come from the panel's own /slots polling —
+  // NInfer reports no per-request output there, so the output column is
+  // '—' and the speed is the panel-wide window average (see reqAvgTip).
+  // Log rows (PANEL_REQUEST_LOG set): the request log carries the real
+  // completion count and decode seconds, so the speed is the request's
+  // own and the duration is TTFT + decode time.
+  const share = (!fromLog && _lastMaxCtx && d.prompt_tokens !== null && d.prompt_tokens !== undefined) ? (d.prompt_tokens / _lastMaxCtx * 100) : null;
+  let status;
+  if(!past) status = T().reqActive;
+  else if(fromLog) status = T().reqEnded.replace('{t}', new Date(d.t * 1000).toLocaleTimeString()) + (d.finish ? ' · ' + d.finish : '');
+  else status = T().reqEnded.replace('{t}', new Date(d.last * 1000).toLocaleTimeString());
+  const outCell = (fromLog && d.completion !== null && d.completion !== undefined)
+    ? '<td class="num" title="' + d.completion.toLocaleString() + '">' + fmtTok(d.completion) + '</td>'
+    : '<td class="num">—</td>';
+  let dur = '—', durTitle = '', avg = null, avgTitle = '';
+  if(fromLog){
+    if(d.ttft !== null && d.ttft !== undefined && d.decode_s !== null && d.decode_s !== undefined){
+      dur = fmtDuration(d.ttft + d.decode_s);
+      const parts = ['TTFT ' + fmtDuration(d.ttft)];
+      if(d.queue !== null && d.queue !== undefined) parts.push(T().rowTipQueue + ' ' + fmtDuration(d.queue));
+      parts.push(T().rowTipDecode + ' ' + fmtDuration(d.decode_s));
+      durTitle = ' title="' + parts.join(' · ') + '"';
+    } else if(d.ttft !== null && d.ttft !== undefined){
+      dur = fmtDuration(d.ttft);
+    }
+    if(d.completion !== null && d.completion !== undefined && d.decode_s > 0){
+      avg = d.completion / d.decode_s;
+      avgTitle = ' title="' + T().reqAvgRealTip + '"';
+    }
+  } else {
+    const end = past ? d.last : Date.now() / 1000;
+    if(d.first !== null && d.first !== undefined && end >= d.first) dur = fmtDuration(end - d.first);
+    if(d.first !== null && d.first !== undefined){
+      avg = _avgDecodeWindow(d.first, end);
+      if(avg !== null) avgTitle = ' title="' + T().reqAvgTip + '"';
+    }
+  }
+  const cachedTitle = ((d.cached_tokens !== null && d.cached_tokens !== undefined) ? d.cached_tokens.toLocaleString() : '') +
+    (fromLog && d.path ? ' · ' + T().reusePathLabel + ' ' + d.path : '');
+  const cachedCell = (d.cached_tokens === null || d.cached_tokens === undefined) ? '—'
+    : fmtTok(d.cached_tokens) + (d.prompt_tokens ? ' · ' + (d.cached_tokens / d.prompt_tokens * 100).toFixed(1) + '%' : '');
+  return '<tr' + (past ? ' class="req-past"' : '') + '><td>#' + ((d.id !== null && d.id !== undefined) ? d.id : '—') +
+    '</td><td class="num"' + ((d.prompt_tokens !== null && d.prompt_tokens !== undefined) ? ' title="' + d.prompt_tokens.toLocaleString() + '"' : '') + '>' + fmtTok(d.prompt_tokens) +
+    '</td>' + outCell +
+    '<td class="num" title="' + cachedTitle + '">' + cachedCell +
     '</td><td class="num" title="' + (d.n_ctx ? d.n_ctx.toLocaleString() : '') + '">' + (d.n_ctx ? fmtTok(d.n_ctx) : '—') +
     '</td><td class="num">' + (share !== null ? share.toFixed(1) + '%' : '—') +
-    '</td><td class="num"' + (avg !== null ? ' title="' + T().reqAvgTip + '"' : '') + '>' + (avg !== null ? fmtRateNum(avg) + ' tok/s' : '—') +
-    '</td><td class="num">' + dur + '</td><td>' + status + '</td></tr>';
+    '</td><td class="num"' + avgTitle + '>' + (avg !== null ? fmtRateNum(avg) + ' tok/s' : '—') +
+    '</td><td class="num"' + durTitle + '>' + dur + '</td><td>' + status + '</td></tr>';
 }
 function renderReqTable(s){
   if(s.context && s.context.max_context) _lastMaxCtx = s.context.max_context;
   const slots = s.slots || {};
   const det = slots.processing_details || [];
   const r = s.requests || {};
-  const past = _pastReqs.map(p => ({id: p.slot, prompt_tokens: p.prompt, cached_tokens: p.cached, n_ctx: p.n_ctx, first: p.first, last: p.last}));
+  const useLog = _logReqs.length > 0;
+  const past = useLog
+    ? _logReqs.map(p => ({id: p.id, prompt_tokens: p.prompt, cached_tokens: p.cached, n_ctx: null, t: p.t, completion: p.completion, ttft: p.ttft, queue: p.queue, decode_s: p.decode_s, path: p.path, finish: p.finish}))
+    : _pastReqs.map(p => ({id: p.slot, prompt_tokens: p.prompt, cached_tokens: p.cached, n_ctx: p.n_ctx, first: p.first, last: p.last}));
+  const noteEl = $('reqHistoryNote');
+  if(noteEl) noteEl.textContent = useLog ? T().reqLogNote : T().reqHistoryNote;
   const body = $('currentReqBody');
   if(!s.ninfer_ok){
-    body.innerHTML = '<tr><td colspan="8" class="muted">' + T().curOffline + '</td></tr>' +
-      past.map(d => _reqRowHtml(d, true)).join('');
+    body.innerHTML = '<tr><td colspan="9" class="muted">' + T().curOffline + '</td></tr>' +
+      past.map(d => _reqRowHtml(d, true, useLog)).join('');
   } else if(!det.length && !past.length){
-    body.innerHTML = '<tr><td colspan="8" class="muted">' + T().curNone +
+    body.innerHTML = '<tr><td colspan="9" class="muted">' + T().curNone +
       ((r.waiting || 0) > 0 ? T().curQueued.replace('{n}', r.waiting) : '') + '</td></tr>';
   } else {
-    body.innerHTML = det.map(d => _reqRowHtml({...d, first: (_activeFirst[d.id] !== undefined ? _activeFirst[d.id] : null)}, false)).join('') + past.map(d => _reqRowHtml(d, true)).join('');
+    body.innerHTML = det.map(d => _reqRowHtml({...d, first: (_activeFirst[d.id] !== undefined ? _activeFirst[d.id] : null)}, false, false)).join('') + past.map(d => _reqRowHtml(d, true, useLog)).join('');
   }
 }
 let _lastReqHistFetch = 0;
@@ -837,7 +882,9 @@ async function fetchReqHistory(){
     const j = await (await fetch('/api/request-history')).json();
     const all = j.requests || [];
     _pastReqs = all.filter(x => x.status === 'ended').sort((a, b) => b.last - a.last);
-    _pastEndedCount = _pastReqs.length;
+    const cutoff = Date.now() / 1000 - 3600;
+    _logReqs = (j.log_requests || []).filter(x => x.t >= cutoff).sort((a, b) => b.t - a.t);
+    _pastEndedCount = _logReqs.length ? _logReqs.length : _pastReqs.length;
     _activeFirst = {};
     all.filter(x => x.status === 'active').forEach(x => { _activeFirst[x.slot] = x.first; });
     if(_lastSnap) renderReqTable(_lastSnap);
@@ -960,8 +1007,36 @@ async function tick(){
   $('cacheMemBar').style.width=(hkv&&hkvCap)?Math.min(100,hkv/hkvCap*100)+'%':'0%';
   $('lastCacheText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?(T().lastCacheReuse.replace('{x}', fmtTok(s.counters.reused_prompt_tokens))):T().reuseNotReported;
   $('reusedTotalText').textContent=(s.counters&&s.counters.reused_prompt_tokens)?fmtTok(s.counters.reused_prompt_tokens):'—';
+  // Context-cache pressure / reuse paths / transfers (from /stats; only
+  // present on builds that report context_cache). Each line appears only
+  // when its numbers were actually reported.
+  const ce = s.cache_extra || {};
+  const ceLines = [];
+  {
+    const parts = [];
+    if(ce.evicted !== null && ce.evicted !== undefined) parts.push(T().evictLabel + ' ' + fmtTok(ce.evicted));
+    if(ce.demoted !== null && ce.demoted !== undefined) parts.push(T().demoteLabel + ' ' + fmtTok(ce.demoted));
+    if(ce.spill_pages !== null && ce.spill_pages !== undefined) parts.push(T().spillLabel + ' ' + fmtTok(ce.spill_pages));
+    if(ce.checkpoints_dropped !== null && ce.checkpoints_dropped !== undefined) parts.push(T().ckptLabel + ' ' + fmtTok(ce.checkpoints_dropped));
+    if(parts.length) ceLines.push(T().pressureLabel + '：' + parts.join(' · '));
+  }
+  if(ce.selections){
+    const ents = Object.entries(ce.selections).map(([k, v]) => k.replace(/_/g, ' ') + ' ' + fmtTok(v));
+    if(ents.length) ceLines.push(T().reusePathsLabel + '：' + ents.join(' · '));
+  }
+  {
+    const parts = [];
+    if(ce.transfer_d2h_bytes !== null && ce.transfer_d2h_bytes !== undefined) parts.push(T().d2hLabel + ' ' + fmtBytes(ce.transfer_d2h_bytes));
+    if(ce.transfer_h2d_bytes !== null && ce.transfer_h2d_bytes !== undefined) parts.push(T().h2dLabel + ' ' + fmtBytes(ce.transfer_h2d_bytes));
+    if(parts.length) ceLines.push(T().transfersLabel + '：' + parts.join(' · '));
+  }
+  const ceEl = $('cacheExtra');
+  ceEl.replaceChildren(...ceLines.map(l => { const dv = document.createElement('div'); dv.textContent = l; return dv; }));
+  ceEl.style.display = ceLines.length ? '' : 'none';
   if(m.requests_total!==undefined && m.requests_total!==null){
-    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateRaw(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0)) + (_pastEndedCount !== null ? T().reqPastEnded.replace('{n}', _pastEndedCount) : '');
+    $('requestTotals').textContent=T().requestTotals.replace('{total}', m.requests_total).replace('{d}', fmtRateNum(m.avg_decode_tok_s)).replace('{p}', fmtRateRaw(m.avg_prefill_tok_s)).replace('{r}', (s.counters?.reused_prompt_tokens?fmtTok(s.counters.reused_prompt_tokens):'—')).replace('{cur}', (slots.processing||0)).replace('{q}', (r.waiting||0)) + (_pastEndedCount !== null ? T().reqPastEnded.replace('{n}', _pastEndedCount) : '')
+      + (m.requests_failed_total > 0 ? T().reqFailedPart.replace('{n}', m.requests_failed_total) : '')
+      + (m.requests_rejected_total > 0 ? T().reqRejectedPart.replace('{n}', m.requests_rejected_total) : '');
   }
   fetchHistory().then(drawHistory);
   if(_prevOnline === true && !s.ninfer_ok){
@@ -1111,8 +1186,8 @@ $('exportHistBtn').addEventListener('click', () => {
   const lastT = histSamples.length ? histSamples[histSamples.length - 1].t : Date.now() / 1000;
   const t1 = Math.max(Date.now() / 1000, lastT);
   const t0 = t1 - histMinutes * 60;
-  const COL = {decode:'decode_tok_s', prefill:'prefill_tok_s', kv:'kv_pct', gpu:'gpu_pct', cum:'cum_decode_tokens'};
-  const FIELD = {decode:'decode', prefill:'prefill', kv:'kv', gpu:'gpu', cum:'out'};
+  const COL = {decode:'decode_tok_s', prefill:'prefill_tok_s', kv:'kv_pct', gpu:'gpu_pct', cum:'cum_decode_tokens', accept:'spec_accept_pct'};
+  const FIELD = {decode:'decode', prefill:'prefill', kv:'kv', gpu:'gpu', cum:'out', accept:'accept'};
   const header = ['time', ...histDims.map(d => COL[d])].join(',');
   const lines = [header];
   histSamples.filter(p => p.t >= t0).forEach(p => {
