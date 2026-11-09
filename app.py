@@ -38,6 +38,8 @@ Environment:
   PANEL_BIND / PANEL_PORT  default 0.0.0.0:8091 (compose publishes it
                    as 127.0.0.1:8091 on the host — see docker-compose.yml)
   POLL_INTERVAL    seconds between backend refreshes, default 2
+  PANEL_REQUEST_LOG  optional path to NInfer's --request-log-jsonl file
+                   (mount it read-only) for real per-request records
 """
 import json
 import os
@@ -60,6 +62,7 @@ WEB_DIR = Path(__file__).resolve().parent / "web"
 _lock = threading.Lock()
 _snapshot = {"ninfer_ok": False, "state": "offline", "error": "not polled yet"}
 _prev = None  # (timestamp, decode_tokens, prefill_tokens)
+_prev_draft = None  # (timestamp, draft_tokens_total, draft_accepted_tokens_total)
 # Rolling 15-minute window: counter samples kept for 900 s so the panel
 # can show a true "last 15 minutes" average like the screenshot panel,
 # not just the since-startup average NInfer itself reports.
@@ -96,7 +99,7 @@ def _history_load():
                 if t >= cutoff:
                     _series.append((t, p.get("d"), p.get("p"), p.get("k"), p.get("g"),
                                     p.get("v"), p.get("e"), p.get("w"), p.get("c"), p.get("s"),
-                                    p.get("o")))
+                                    p.get("o"), p.get("a")))
             except (ValueError, KeyError, TypeError):
                 continue
     except Exception:
@@ -105,15 +108,18 @@ def _history_load():
 
 def _history_append(now, decode, prefill, kv_pct, gpu_pct,
                     vram_gb=None, temp_c=None, power_w=None, cpu_pct=None, disk_read_mbs=None,
-                    cum_decode=None):
+                    cum_decode=None, accept_pct=None):
     """Append one point to memory and to the file; prune stale data.
 
     cum_decode is the committed_decode_tokens counter at poll time: a level,
     not a rate, so the cumulative-output curve reads it directly and the
-    downsampler keeps the bucket-end value instead of averaging it."""
+    downsampler keeps the bucket-end value instead of averaging it.
+    accept_pct is the interval speculative-acceptance rate (%) computed
+    from /metrics draft-counter deltas; None when no drafts happened."""
     global _last_file_prune
     _series.append((now, decode, prefill, kv_pct, gpu_pct,
-                    vram_gb, temp_c, power_w, cpu_pct, disk_read_mbs, cum_decode))
+                    vram_gb, temp_c, power_w, cpu_pct, disk_read_mbs, cum_decode,
+                    accept_pct))
     cutoff = now - HISTORY_RETENTION
     while _series and _series[0][0] < cutoff:
         _series.popleft()
@@ -124,14 +130,14 @@ def _history_append(now, decode, prefill, kv_pct, gpu_pct,
             fh.write(json.dumps(
                 {"t": now, "d": decode, "p": prefill, "k": kv_pct, "g": gpu_pct,
                  "v": vram_gb, "e": temp_c, "w": power_w, "c": cpu_pct, "s": disk_read_mbs,
-                 "o": cum_decode}) + "\n")
+                 "o": cum_decode, "a": accept_pct}) + "\n")
         if now - _last_file_prune > 3600:
             _last_file_prune = now
             with path.open("w") as fh:
-                for t, d, p, k, g, v, e, w, c, s, o in _series:
+                for t, d, p, k, g, v, e, w, c, s, o, a in _series:
                     fh.write(json.dumps({"t": t, "d": d, "p": p, "k": k, "g": g,
                                          "v": v, "e": e, "w": w, "c": c, "s": s,
-                                         "o": o}) + "\n")
+                                         "o": o, "a": a}) + "\n")
     except Exception:
         pass  # history falls back to memory-only; never break polling
 
@@ -295,6 +301,168 @@ def _requests_update(details, now):
             dirty = True
         if dirty:
             _requests_save()
+
+
+
+# Optional NInfer request log (--request-log-jsonl on the serve command):
+# when the operator mounts that file into the panel and sets
+# PANEL_REQUEST_LOG, the poller tails it and keeps parsed request_done
+# records — the same fields NInfer's own tools/monitor reads. This is the
+# only source of real per-request output counts, decode speeds and TTFT;
+# the log carries counts and timings only, never prompt or output text.
+# Parsed records and the tail offset persist next to requests.json, so a
+# panel restart resumes instead of re-importing. Without the env var (or
+# the file) the feature is off and the observation records above remain
+# the past-rows source.
+REQUEST_LOG = os.environ.get("PANEL_REQUEST_LOG", "")
+REQLOG_FILE = os.environ.get(
+    "PANEL_REQLOG_FILE", str(Path(HISTORY_FILE).parent / "request_log.json"))
+REQLOG_STATE_FILE = str(Path(HISTORY_FILE).parent / "reqlog_state.json")
+REQLOG_CAP = 500
+REQLOG_BOOTSTRAP_BYTES = 4_000_000
+_reqlog = []  # dicts: id, t, prompt, completion, cached, path, ttft, queue, decode_s, finish
+_reqlog_offset = None  # None until loaded or first tail poll
+
+
+def _reqlog_load():
+    """Load parsed records and the saved tail offset; never fatal."""
+    global _reqlog_offset
+    try:
+        path = Path(REQLOG_FILE)
+        if path.is_file():
+            cutoff = time.time() - REQUESTS_WINDOW
+            for line in path.read_text().splitlines():
+                try:
+                    r = json.loads(line)
+                    rec = {"id": r.get("id"), "t": float(r["t"]),
+                           "prompt": r.get("prompt"), "completion": r.get("completion"),
+                           "cached": r.get("cached"), "path": r.get("path"),
+                           "ttft": r.get("ttft"), "queue": r.get("queue"),
+                           "decode_s": r.get("decode_s"), "finish": r.get("finish")}
+                    if rec["t"] >= cutoff:
+                        _reqlog.append(rec)
+                except (ValueError, KeyError, TypeError):
+                    continue
+            _reqlog.sort(key=lambda r: r["t"])
+            while len(_reqlog) > REQLOG_CAP:
+                _reqlog.pop(0)
+    except Exception:
+        pass
+    try:
+        state = json.loads(Path(REQLOG_STATE_FILE).read_text())
+        off = int(state.get("offset"))
+        if off >= 0:
+            _reqlog_offset = off
+    except Exception:
+        pass
+
+
+def _reqlog_save():
+    """Persist records and offset; never fatal."""
+    try:
+        path = Path(REQLOG_FILE)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        with tmp.open("w") as fh:
+            for r in _reqlog:
+                fh.write(json.dumps(r) + "\n")
+        tmp.replace(path)
+        Path(REQLOG_STATE_FILE).write_text(
+            json.dumps({"offset": _reqlog_offset or 0}))
+    except Exception:
+        pass
+
+
+def _reqlog_parse(line):
+    """One JSONL line -> a request_done record, or None. Mirrors the field
+    usage of NInfer's own tools/monitor: counts and timings only."""
+    try:
+        rec = json.loads(line)
+    except ValueError:
+        return None
+    if rec.get("event") != "request_done":
+        return None
+    ts = rec.get("timestamp_unix_ms")
+    if not isinstance(ts, (int, float)):
+        return None
+    res = rec.get("result") or {}
+    timings = rec.get("timings_seconds") or {}
+    eng = rec.get("engine_timing") or {}
+
+    def num(d, k):
+        v = d.get(k)
+        return v if isinstance(v, (int, float)) else None
+
+    return {"id": (rec.get("request") or {}).get("request_id"),
+            "t": ts / 1000.0,
+            "prompt": num(res, "prompt_tokens"),
+            "completion": num(res, "completion_tokens"),
+            "cached": num(res, "prefix_cache_hit_tokens"),
+            "path": res.get("prefix_reuse_path"),
+            "ttft": num(timings, "ttft"),
+            "queue": num(eng, "queue_wait_seconds"),
+            "decode_s": num(timings, "decode"),
+            "finish": res.get("finish_reason")}
+
+
+def _reqlog_poll():
+    """Tail the request log once; fail-soft like every other source."""
+    global _reqlog_offset
+    if not REQUEST_LOG:
+        return
+    try:
+        path = Path(REQUEST_LOG)
+        size = path.stat().st_size
+        if _reqlog_offset is None:
+            # First sight: bootstrap from the tail so a huge log is not
+            # imported whole (records are windowed to the last hour).
+            start = max(0, size - REQLOG_BOOTSTRAP_BYTES)
+            skip_partial = start > 0
+        elif _reqlog_offset > size:
+            start, skip_partial = 0, False  # rotated or truncated
+        else:
+            start, skip_partial = _reqlog_offset, False
+        if size == start:
+            _reqlog_offset = start
+            return
+        with path.open("rb") as fh:
+            fh.seek(start)
+            data = fh.read(min(size - start, 16_000_000))
+        if skip_partial:
+            nl = data.find(b"\n")
+            if nl < 0:
+                return
+            start += nl + 1
+            data = data[nl + 1:]
+        end = data.rfind(b"\n")
+        if end < 0:
+            if len(data) >= 16_000_000:
+                _reqlog_offset = size  # one gigantic line: skip it
+            return
+        chunk = data[:end]
+        new_offset = start + end + 1
+        now = time.time()
+        added = []
+        for raw in chunk.split(b"\n"):
+            if raw.strip():
+                rec = _reqlog_parse(raw.decode("utf-8", "replace"))
+                if rec is not None:
+                    added.append(rec)
+        changed = new_offset != _reqlog_offset
+        _reqlog_offset = new_offset
+        if added:
+            with _lock:
+                _reqlog.extend(added)
+                _reqlog.sort(key=lambda r: r["t"])
+                _reqlog[:] = [r for r in _reqlog
+                              if r["t"] >= now - REQUESTS_WINDOW]
+                while len(_reqlog) > REQLOG_CAP:
+                    _reqlog.pop(0)
+            changed = True
+        if changed:
+            _reqlog_save()
+    except Exception:
+        pass
 
 
 # GUI-editable NInfer address. Precedence: GUI-saved value (settings.json
@@ -617,7 +785,7 @@ def _host_mem():
 
 
 def _poll_once():
-    global _prev, _last_ok
+    global _prev, _last_ok, _prev_draft
     now = time.time()
     snap = {"as_of": now, "ninfer_base_url": _current_base(), "ninfer_ok": False,
             "state": "offline", "error": None, "last_ok": _last_ok}
@@ -738,13 +906,74 @@ def _poll_once():
         }
         # /stats throughput block shape varies by build; keep raw keys the UI may use.
         snap["cumulative_avg"]["raw_throughput_block"] = tps
+        # Host KV fallback: some builds leave host KV empty in /v1/load
+        # but report it in /stats. Fill from /stats ONLY when /v1/load
+        # left it empty, so a working primary source is never overridden.
+        try:
+            stats_cap = int(_num(stats.get("capacity", {}) or {}, "host_kv_bytes"))
+            if stats_cap > 0:
+                ctx = snap.get("context") or {}
+                if not ctx.get("host_kv_capacity_bytes"):
+                    ctx["host_kv_bytes"] = int(_num(
+                        stats.get("occupancy", {}) or {}, "host_kv_bytes"))
+                    ctx["host_kv_capacity_bytes"] = stats_cap
+                    ctx["host_kv_source"] = "stats"
+                    snap["context"] = ctx
+        except Exception:
+            pass
+        # Context-cache pressure / reuse paths / transfers (hybrid builds).
+        try:
+            cc = stats.get("context_cache", {}) or {}
+            pr = cc.get("pressure", {}) or {}
+
+            def _opt(d, k):
+                v = d.get(k)
+                return v if isinstance(v, (int, float)) else None
+
+            ev_parts = [v for v in (pr.get("private_owners_evicted"),
+                                    pr.get("shared_owners_evicted"))
+                        if isinstance(v, (int, float))]
+            sel = cc.get("selections", {}) or {}
+            sel = {k: v for k, v in sel.items()
+                   if isinstance(v, (int, float))}
+
+            def _xfer(direction):
+                tot, seen = 0.0, False
+                for block in ("main_kv_transfers", "backend_kv_transfers"):
+                    leg = (cc.get(block, {}) or {}).get(direction, {}) or {}
+                    b = leg.get("bytes")
+                    if isinstance(b, (int, float)):
+                        tot += b
+                        seen = True
+                return tot if seen else None
+
+            snap["cache_extra"] = {
+                "evicted": sum(ev_parts) if ev_parts else None,
+                "demoted": _opt(pr, "private_owners_demoted"),
+                "spill_pages": _opt(pr, "spill_pages"),
+                "checkpoints_dropped": _opt(pr, "checkpoints_dropped"),
+                "selections": sel or None,
+                "transfer_d2h_bytes": _xfer("d2h"),
+                "transfer_h2d_bytes": _xfer("h2d"),
+            }
+        except Exception:
+            snap["cache_extra"] = None
     except Exception:
         snap["cumulative_avg"] = None
+        snap["cache_extra"] = None
+    accept_pct = None
     try:
         _, metrics_body = _get("/metrics", timeout=3)
         m = _parse_metrics(metrics_body)
         draft_total = m.get("ninfer:draft_tokens_total")
         draft_acc = m.get("ninfer:draft_accepted_tokens_total")
+        if draft_total is not None and draft_acc is not None:
+            if _prev_draft is not None:
+                _pt, _ptot, _pacc = _prev_draft
+                if (now - _pt) > 0 and draft_total > _ptot and draft_acc >= _pacc:
+                    accept_pct = ((draft_acc - _pacc)
+                                  / (draft_total - _ptot) * 100.0)
+            _prev_draft = (now, draft_total, draft_acc)
         snap["metrics"] = {
             "requests_total": m.get("ninfer:requests_total"),
             "requests_failed_total": m.get("ninfer:requests_failed_total"),
@@ -808,7 +1037,8 @@ def _poll_once():
     _cum = int(_cum) if _cum is not None else None
     _history_append(now, decode_rate, prefill_rate,
                     (kv_tokens / kv_cap * 100.0) if kv_cap else None, gpu_util,
-                    vram_gb, temp_c, power_w, cpu_pct, disk_read, _cum)
+                    vram_gb, temp_c, power_w, cpu_pct, disk_read, _cum,
+                    accept_pct)
     return snap
 
 
@@ -828,6 +1058,7 @@ def _poller():
         with _lock:
             _snapshot.clear()
             _snapshot.update(snap)
+        _reqlog_poll()
         time.sleep(POLL)
 
 
@@ -899,12 +1130,14 @@ class Handler(BaseHTTPRequestHandler):
                     out.append({"t": vals[len(vals) // 2][0], "decode": avg(1),
                                 "prefill": avg(2), "kv": avg(3), "gpu": avg(4),
                                 "vram": avg(5), "temp": avg(6), "power": avg(7),
-                                "cpu": avg(8), "disk": avg(9), "out": last(10)})
+                                "cpu": avg(8), "disk": avg(9), "out": last(10),
+                                "accept": avg(11)})
                 pts = out
             else:
                 pts = [{"t": t, "decode": d, "prefill": p, "kv": k, "gpu": g,
-                        "vram": v, "temp": e, "power": w, "cpu": c, "disk": s, "out": o}
-                       for t, d, p, k, g, v, e, w, c, s, o in pts]
+                        "vram": v, "temp": e, "power": w, "cpu": c, "disk": s,
+                        "out": o, "accept": a}
+                       for t, d, p, k, g, v, e, w, c, s, o, a in pts]
             self._send(200, json.dumps({"samples": pts, "minutes": minutes,
                                         "retention_seconds": HISTORY_RETENTION}),
                        "application/json")
@@ -927,7 +1160,10 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/request-history":
             with _lock:
                 reqs = [dict(r) for r in _requests]
-            self._send(200, json.dumps({"requests": reqs}), "application/json")
+                log_reqs = [dict(r) for r in _reqlog]
+            self._send(200, json.dumps({"requests": reqs,
+                                        "log_requests": log_reqs}),
+                       "application/json")
             return
         if self.path.startswith("/api/test-connection"):
             from urllib.parse import urlparse, parse_qs
@@ -966,6 +1202,7 @@ if __name__ == "__main__":
     _history_load()
     _events_load()
     _requests_load()
+    _reqlog_load()
     _settings_load()
     threading.Thread(target=_poller, daemon=True).start()
     print(f"ninfer-live-panel: polling {_current_base()} every {POLL}s, listening on {BIND}:{PORT}",

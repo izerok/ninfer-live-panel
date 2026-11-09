@@ -41,9 +41,15 @@ services:
       NINFER_API_KEY: ${NINFER_API_KEY:-}
       PANEL_PORT: "8091"
       POLL_INTERVAL: "2"
+      # Optional: real per-request rows from NInfer's request log. Start
+      # NInfer with --request-log-jsonl <file>, mount that file read-only
+      # (see the volumes note below) and uncomment:
+      # PANEL_REQUEST_LOG: "/app/request-log.jsonl"
     volumes:
       # Optional but recommended for true host memory numbers.
       - /proc:/host/proc:ro
+      # Optional request-log mount (pairs with PANEL_REQUEST_LOG above):
+      # - /path/to/ninfer-requests.jsonl:/app/request-log.jsonl:ro
       # Persists the history curve (data/history.jsonl) so a page refresh,
       # a container restart, or a recreate does not wipe it. Without this
       # volume the file lives in the container layer: refresh-safe, but
